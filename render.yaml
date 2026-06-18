@@ -1,7 +1,7 @@
 services:
   - type: web
     name: firecast-api
-    runtime: python
+    runtime: python-3.9
     plan: free
     buildCommand: pip install -r requirements.txt -r requirements-api.txt
     startCommand: bash /app/start_api.sh
@@ -31,7 +31,7 @@ services:
 
   - type: web
     name: firecast-frontend
-    runtime: python
+    runtime: python-3.9
     plan: free
     buildCommand: pip install -r requirements.txt -r requirements-frontend.txt
     startCommand: streamlit run frontend/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
