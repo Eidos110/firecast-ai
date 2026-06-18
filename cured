@@ -1,0 +1,225 @@
+Layer                   Teknologi                               Fungsi
+Frontend        React + Vite (Streamlit Template)   UI Map, event listener, rendering
+Map Engine      Leaflet + Leaflet-Draw              Rendering peta, klik, gambar polygon
+Geospatial      toGeoJSON() (JS) ↔ geopandas (Python)   Format data spasial standar
+Backend         Streamlit st.components.v1              Bridge JS ↔ Python
+State/Perf      st.session_state + @st.fragment         Isolasi rerun, cache model
+Communication   Streamlit.setComponentValue()           Kirim event/data JS → Python
+
+
+🔁 Alur Data (Bidirectional)
+[JS: Click/Draw] → Streamlit.setComponentValue({type, payload}) 
+       ↓
+[Python: st.components] → return dict ke variabel Python
+       ↓
+[Python: st.session_state] → trigger prediction (isolated via @st.fragment)
+       ↓
+[Python: Model + Geopandas] → hasil prediksi
+       ↓
+[Python → JS] → props.args / Streamlit.renderData() → render overlay di peta
+
+
+Frontend Implementation (React + Leaflet)
+import React, { useEffect, useRef } from 'react';
+import L from 'leaflet';
+import 'leaflet-draw';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet-draw/dist/leaflet.draw.css';
+import { Streamlit, ComponentProps } from 'streamlit-component-lib';
+
+// Fix ikon default Leaflet di React/Vite
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+export function InteractiveMap(props: ComponentProps) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<L.Map | null>(null);
+  const drawnItems = useRef<L.FeatureGroup | null>(null);
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return;
+
+    // Inisialisasi peta
+    mapInstance.current = L.map(mapRef.current).setView([-6.175, 106.827], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(mapInstance.current);
+
+    // Layer untuk AOI
+    drawnItems.current = new L.FeatureGroup();
+    mapInstance.current.addLayer(drawnItems.current);
+
+    // Kontrol Draw (hanya Polygon)
+    const drawControl = new L.Control.Draw({
+      draw: { polygon: true, rectangle: false, circle: false, marker: false, polyline: false },
+      edit: { featureGroup: drawnItems.current }
+    });
+    mapInstance.current.addControl(drawControl);
+
+    // Event: Click
+    mapInstance.current.on('click', (e: L.LeafletMouseEvent) => {
+      Streamlit.setComponentValue({
+        type: 'click',
+        lat: e.latlng.lat,
+        lng: e.latlng.lng,
+        timestamp: Date.now()
+      });
+    });
+
+    // Event: Draw Created
+    mapInstance.current.on(L.Draw.Event.CREATED, (e: any) => {
+      const layer = e.layer;
+      drawnItems.current?.addLayer(layer);
+      
+      Streamlit.setComponentValue({
+        type: 'aoi',
+        geometry: layer.toGeoJSON(),
+        timestamp: Date.now()
+      });
+    });
+
+    // Event: Draw Edited/Deleted
+    mapInstance.current.on(L.Draw.Event.EDITED, (e: any) => {
+      const layers = e.layers;
+      const updatedGeoJSONs = [];
+      layers.eachLayer((layer: L.Layer) => {
+        updatedGeoJSONs.push((layer as L.Polygon).toGeoJSON());
+      });
+      Streamlit.setComponentValue({
+        type: 'aoi_updated',
+        geometries: updatedGeoJSONs,
+        timestamp: Date.now()
+      });
+    });
+
+    Streamlit.setComponentReady();
+  }, []);
+
+  // Terima data dari Python (misal: hasil prediksi untuk di-render)
+  useEffect(() => {
+    if (props.args.predictionOverlay && mapInstance.current && drawnItems.current) {
+      // Hapus overlay lama
+      drawnItems.current.clearLayers();
+      // Render GeoJSON baru
+      L.geoJSON(props.args.predictionOverlay).addTo(drawnItems.current);
+      mapInstance.current.fitBounds(drawnItems.current.getBounds());
+    }
+  }, [props.args]);
+
+  return <div ref={mapRef} style={{ width: '100%', height: props.args.height || 600 }} />;
+}
+
+Backend Integration (Streamlit Python)
+import streamlit as st
+import streamlit.components.v1 as components
+import geopandas as gpd
+from shapely.geometry import Point, shape
+import numpy as np
+
+# 1. Declare component (path ke folder build frontend)
+InteractiveMap = components.declare_component("interactive_map", path="frontend/build")
+
+# 2. Load model sekali saja (cache resource)
+@st.cache_resource
+def load_model():
+    # Ganti dengan model kamu (sklearn, pytorch, tensorflow, dll)
+    return {"dummy": lambda x, y: np.random.rand()}
+
+model = load_model()
+
+# 3. Inisialisasi session state
+if "map_output" not in st.session_state:
+    st.session_state.map_output = None
+if "prediction_result" not in st.session_state:
+    st.session_state.prediction_result = None
+if "aoi_geojson" not in st.session_state:
+    st.session_state.aoi_geojson = None
+
+# 4. Render komponen
+st.header("🌍 Interactive Prediction Map")
+map_output = InteractiveMap(
+    height=600,
+    predictionOverlay=st.session_state.prediction_result
+)
+
+# 5. Tangani event dari JS
+if map_output and map_output.get("type") in ["click", "aoi", "aoi_updated"]:
+    st.session_state.map_output = map_output
+    trigger_prediction(map_output)
+
+# 6. Fragment untuk isolasi rerun (hanya bagian ini yang rerun)
+@st.fragment
+def trigger_prediction(data):
+    with st.spinner("🔍 Predicting..."):
+        if data["type"] == "click":
+            lat, lon = data["lat"], data["lng"]
+            pred = model["dummy"](lat, lon)
+            st.success(f"📍 Single Click: ({lat:.4f}, {lon:.4f}) → Prediction: {pred:.3f}")
+            
+        elif data["type"] in ["aoi", "aoi_updated"]:
+            geo = data.get("geometry") or data["geometries"][0]
+            polygon = shape(geo["geometry"])
+            gdf = gpd.GeoDataFrame({"geometry": [polygon]}, crs="EPSG:4326")
+            
+            # Contoh: buat grid 50x50m di dalam polygon
+            grid = gdf.iloc[0].geometry.buffer(0).bounds
+            xs = np.linspace(grid[0], grid[2], 20)
+            ys = np.linspace(grid[1], grid[3], 20)
+            points = [Point(x, y) for x in xs for y in ys if gdf.contains(Point(x, y)).any()]
+            
+            preds = [model["dummy"](p.y, p.x) for p in points]
+            
+            # Format balik ke GeoJSON untuk dikirim ke JS
+            features = [{
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [p.x, p.y]},
+                "properties": {"prediction": float(p)}
+            } for p, pred in zip(points, preds)]
+            
+            st.session_state.prediction_result = {
+                "type": "FeatureCollection",
+                "features": features
+            }
+            st.success(f"📐 AOI Batch: {len(points)} points predicted")
+
+
+Teknik Komunikasi & Event Handling
+
+Teknik                                          Penjelasan
+Streamlit.setComponentValue()              Kirim payload JS → Python. Hanya trigger 1x per event.
+props.args                                 Kirim data Python → JS. Update UI tanpa reload.
+@st.fragment                        Isolasi rerun. Hanya fragment yang rerun, tidak mengganggu sidebar/widget lain.
+timestamp field                     Hindari duplicate trigger akibat Streamlit double-render. Cek if data.get("timestamp") != last_ts.
+GeoJSON standar                     Leaflet toGeoJSON() menghasilkan RFC 7946. Langsung kompatibel dengan geopandas.from_features().
+
+Integrasi Model & Batch Prediction
+Strategi AOI Batch:
+    1. Parse GeoJSON → shapely.geometry.shape()
+    2.Validasi CRS (EPSG:4326)
+    3.Generate grid/raster di dalam polygon (geopandas.clip + numpy.meshgrid)
+    4.Vectorized prediction (model.predict(X_batch))
+    5.Convert hasil ke GeoJSON FeatureCollection
+    6.Kirim balik ke JS via predictionOverlay props
+    7.Render sebagai heatmap/marker cluster di Leaflet
+
+Optimasi Data Science:
+   - Gunakan @st.cache_resource untuk model & tokenizer/encoder
+   - Precompute features jika memungkinkan
+   - Batasi grid resolution (misal 50m atau 100m) agar tidak OOM
+   - Gunakan geopandas.sjoin jika prediksi berbasis zone/shapefile existing
+
+Best Practices & Troubleshooting
+Map hilang state setelah rerun
+----Pindahkan inisialisasi map ke useEffect([]) dengan dependency kosong. Gunakan Streamlit.setComponentReady()
+Payload terlalu besar
+----Chunk GeoJSON, gunakan precision: 4 di JS, atau kirim hanya bounding box + grid count
+Model predict lambat
+----Gunakan @st.cache_data untuk feature engineering, @st.cache_resource untuk model, tampilkan st.progress
+Leaflet icon broken
+----Gunakan CDN atau bundle ikon secara manual di vite.config.ts
+Double trigger event
+----Tambah timestamp atau event_id di JS, filter di Python dengan st.session_state.last_event_id

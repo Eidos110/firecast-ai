@@ -1,0 +1,29 @@
+# FireCast Frontend Dependencies
+# Install with: pip install -r requirements-frontend.txt
+
+# Core Web Framework
+streamlit>=1.28.0
+
+# Map Visualization
+folium>=0.14.0
+streamlit-folium>=0.15.0
+streamlit-deckgl>=0.5.0
+
+# Data Visualization
+plotly>=5.15.0
+
+# Image Processing (for map tiles)
+pillow>=10.0.0
+
+# Frontend-specific utilities
+streamlit-option-menu>=0.3.6
+streamlit-aggrid>=0.3.4
+
+# Database (SQLite/PostgreSQL ORM)
+sqlmodel>=0.0.14
+
+# Google Earth Engine
+earthengine-api>=0.1.371
+
+# Note: This file includes only frontend-specific dependencies.
+# Install requirements.txt first for core dependencies.

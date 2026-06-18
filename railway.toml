@@ -1,0 +1,17 @@
+version = 2
+
+[build]
+builder = "RAILPACK"
+
+[deploy]
+startCommand = "streamlit run frontend/app.py --server.port=$PORT --server.address=0.0.0.0"
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 30
+restartPolicyType = "always"
+
+# service-scoped env
+[services.firecast-frontend.env]
+APP_ENV = "production"
+DEBUG = "false"
+LOG_LEVEL = "WARNING"
+ENABLE_DEMO_MODE = "false"
