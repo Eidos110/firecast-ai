@@ -135,6 +135,8 @@ models/*.pth.bak
 *.csv.bak
 .env
 
+add_new_model/firecast-001-db06a187f9f4.json
+
 # Keep these files
 !models/cnn_best.pth
 !models/lgbm_best.pkl
