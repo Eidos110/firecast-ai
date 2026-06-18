@@ -1,0 +1,17 @@
+# Railway service — FireCast API (FastAPI)
+version = 2
+
+[build]
+builder = "RAILPACK"
+buildCommand = "pip install --no-cache-dir -r requirements.txt"
+
+[deploy]
+startCommand = "uvicorn src.geo_api:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 10
+restartPolicyType = "on-failure"
+
+[services.env]
+API_HOST = "0.0.0.0"
+API_PORT = "$PORT"
+ENABLE_CORS = "true"

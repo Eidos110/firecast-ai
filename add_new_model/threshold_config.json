@@ -1,0 +1,6 @@
+{
+    "optimal_threshold": 0.4560557207107678,
+    "final_method": "LogisticRegressionCV",
+    "final_auc": 0.8898831611903982,
+    "meta_learner_type": "LogisticRegressionCV"
+}

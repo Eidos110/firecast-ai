@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: firecast-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt -r requirements-api.txt
+    startCommand: bash /app/start_api.sh
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: WARNING
+      - key: ENABLE_DEMO_MODE
+        value: false
+      - key: ML_DEVICE
+        value: cpu
+      - key: PYTHONPATH
+        value: /app
+      - key: ALLOWED_ORIGINS
+        value: https://firecast-frontend.onrender.com,http://localhost:8501
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: API_SECRET_KEY
+        sync: false
+      - key: ENABLE_CORS
+        value: true
+    healthCheckPath: /health
+    autoDeploy: true
+
+  - type: web
+    name: firecast-frontend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt -r requirements-frontend.txt
+    startCommand: streamlit run frontend/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: WARNING
+      - key: ENABLE_DEMO_MODE
+        value: false
+      - key: PYTHONPATH
+        value: /app
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: API_BASE_URL
+        value: https://firecast-api.onrender.com
+    healthCheckPath: /_stcore/health
+    autoDeploy: true

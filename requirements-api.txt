@@ -1,0 +1,29 @@
+# FireCast API Dependencies
+# Install with: pip install -r requirements-api.txt
+
+# FastAPI Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# API Security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+
+# CORS Middleware
+python-dotenv>=1.0.0
+
+# Geospatial (H3 hexagons)
+h3>=3.7.6
+
+# Background Tasks
+APScheduler>=3.10.4
+
+# Rate Limiting
+slowapi>=0.1.9
+
+# API Documentation (enhanced)
+mkdocs>=1.5.0
+
+# Note: This file includes only API-specific dependencies.
+# Install requirements.txt first for core dependencies.

@@ -1,0 +1,145 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Mypy
+.mypy_cache/
+
+# Logs
+logs/
+*.log
+
+# Cache
+.cache/
+*.pkl
+*.pickle
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Model files (large binary files)
+# Uncomment if you want to exclude models from git
+# models/*.pth
+# models/*.pkl
+
+# Large data files
+data/*.csv
+data/*.zip
+
+# Debug scripts
+debug_*.py
+debug*.py
+check_*.py
+
+# Dev/build snippets
+fix_indent.py
+show_spaces.py
+find_plus*.py
+find_triple_quotes.py
+restore_results_display.py
+indent_view.txt
+print_lines.py
+quick_test.py
+analyze_*.py
+validate_project.py
+verify_models.py
+demo_interactive_map.py
+demo_simple_interactive_map.py
+quotes.txt
+aoi_block.txt
+bug_analysis_report.md
+check_ts.bat
+run_debug.bat
+
+
+
+# Documentation builds
+docs/_build/
+site/
+
+# Local configuration
+local_config.py
+personal_config.py
+
+# Output files
+output/
+results/
+*.png
+*.jpg
+*.pdf
+
+# Node modules (if using any JS tools)
+node_modules/
+frontend_react/node_modules/
+# Keep built frontend assets for deployment
+# frontend_react/build/  (commented out to include in git)
+frontend_react/dist/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Project specific
+data/raw/
+models/*.pth.bak
+*.csv.bak
+.env
+
+# Keep these files
+!models/cnn_best.pth
+!models/lgbm_best.pkl
+!models/scaler.pkl
+!models/ensemble_threshold.pkl
+!models/feature_columns.json
+!data/firecast_data_readymodelling_final_V3.csv
+!data/processed_firecast_features_v3.csv

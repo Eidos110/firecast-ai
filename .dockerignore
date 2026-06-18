@@ -1,0 +1,89 @@
+# =============================================================================
+# Docker Ignore
+# Applied before Railway build context is captured.
+# Keeps only files needed for the Dockerfile build.
+#
+# Verified: every COPYed/used path below is NOT matched by any rule here.
+# React stage (stage 0) uses: frontend_react/package.json, package-lock.json,
+#   vite.config.ts, tsconfig*.json, src/, build/ — all kept.
+# Pip installs use: requirements*.txt — all kept.
+# COPY . . stages need: all src/, frontend/, models/, data/ (kept).
+# =============================================================================
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ── Node dependencies (reinstalled by npm ci in Docker) ──
+node_modules/
+frontend_react/node_modules/
+
+# ── Test / dev caches ──
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.hypothesis/
+htmlcov/
+.coverage
+
+# ── IDE / editor ──
+.vscode/
+.idea/
+
+# ── OS / system files ──
+.DS_Store
+Thumbs.db
+
+# ── Temporary / scratch ──
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.tmp/
+
+# ── Jupyter checkpoints ──
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# ── Python build / packaging ──
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+
+# ── Virtual environments ──
+venv/
+ENV/
+env/
+.venv
+
+# ── Logs ──
+logs/
+*.log
+
+# ── Secrets (Railway injects via env vars) ──
+.env
+.env.local
+.env.*.local
+.env.production
+
+# ── Output / results ──
+output/
+results/
+*.png
+*.jpg
+*.pdf

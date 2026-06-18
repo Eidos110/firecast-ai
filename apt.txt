@@ -1,0 +1,23 @@
+# System dependencies for FireCast
+# Installed via apt-get during Railway buildpack phase
+# Packages required for:
+# - PyTorch, LightGBM (libgomp)
+# - Geospatial (shapely, geopandas, GDAL/GEOS/PROJ)
+# - Image processing (Pillow)
+# - Cryptography (libssl, libffi)
+
+gcc
+g++
+libgomp1
+libglib2.0-0
+libsm6
+libxext6
+libxrender-dev
+libproj-dev
+libgeos-dev
+gdal-bin
+libgdal-dev
+libssl-dev
+libffi-dev
+libjpeg-dev
+zlib1g-dev
