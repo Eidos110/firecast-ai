@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: bash /app/start_api.sh
+    startCommand: python /app/start_api.py
     envVars:
       - key: APP_ENV
         value: production
