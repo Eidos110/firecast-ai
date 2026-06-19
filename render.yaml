@@ -3,7 +3,7 @@ services:
     name: firecast-api
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt -r requirements-api.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: bash /app/start_api.sh
     envVars:
       - key: APP_ENV

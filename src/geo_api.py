@@ -163,8 +163,6 @@ def _build_hex_record(hid: str, count: int, avg_prob: Optional[float]) -> dict:
 # --- FastAPI app ---
 app = FastAPI(
     title="FireCast Geo API",
-    # Limit request body size to 10MB to prevent memory exhaustion
-    max_body_size=10 * 1024 * 1024,  # 10MB
 )
 
 # --- Rate Limiting ---
