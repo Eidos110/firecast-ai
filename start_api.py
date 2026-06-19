@@ -8,37 +8,35 @@ Railway runtime logs, even after exec replaces the process.
 import os
 import sys
 
-# ─── Install directory (+cwd fallback so 'src.' always resolves) ───
-_here = os.path.dirname(os.path.abspath(__file__))  # e.g. /app
-for _p in (_here, os.getcwd()):
-    if _p and _p not in sys.path:
-        sys.path.insert(0, _p)
-os.environ["PYTHONPATH"] = _here  # also export for child processes
+# Setup directories
+os.makedirs("/app/models", exist_ok=True)
+os.makedirs("/app/data", exist_ok=True)
 
-# ─── Diagnostics ───
-print("=== start_api.py ===")
-print(f"__file__={__file__}")
-print(f"cwd={os.getcwd()}")
-print(f"sys.argv={sys.argv}")
-print(f"PORT={os.environ.get('PORT', '<not set>')}")
-print(f"PYTHONPATH={os.environ.get('PYTHONPATH', '<not set>')}")
-print(f"python={sys.executable} {sys.version}")
-print("--- importing uvicorn ---")
-import uvicorn          # noqa: E402  (stdlib print already done beforehand)
-print(f"uvicorn={uvicorn.__version__}")
-print("--- importing src.config ---")
-from src import config  # noqa: E402  (triggers lazy torch load; prints device)
-print("--- importing src.geo_api ---")
-from src.geo_api import app  # noqa: E402
-print("--- geo_api imported OK\n")
+# Use start_api.sh logic: check model files and set DEMO_MODE
+MODEL_MISSING = 0
+for model in ["cnn_best.pth", "lgbm_best.pkl", "scaler.pkl", "ensemble_threshold.pkl"]:
+    if not os.path.exists(f"/app/models/{model}"):
+        MODEL_MISSING = 1
+        break
+
+if MODEL_MISSING:
+    os.environ["ENABLE_DEMO_MODE"] = "true"
+else:
+    os.environ["ENABLE_DEMO_MODE"] = "false"
+
+# Ensure PYTHONPATH
+os.environ["PYTHONPATH"] = "/app"
+sys.path.insert(0, "/app")
+sys.path.insert(0, os.getcwd())
+
+import uvicorn
+from src.geo_api import app
 
 port = int(os.environ.get("PORT", os.environ.get("API_PORT", "8000")))
-print(f"=== STARTING uvicorn on 0.0.0.0:{port} ===")
-# launch uvicorn directly via its programmatic interface so
-# stdout / stderr are inherited from this process
 uvicorn.run(
-    "src.geo_api:app",
+    app,
     host="0.0.0.0",
     port=port,
     timeout_keep_alive=30,
+    log_level="info",
 )
