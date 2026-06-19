@@ -27,8 +27,8 @@ h3>=3.7.6
 # torch>=2.1 ships PT_GNU_STACK=RWX, compatible with Railway's process personality
 # Force CPU-only PyTorch wheels to avoid CUDA stack on render free workers
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.1.2
-torchvision==0.16.2
+torch>=2.4.1
+torchvision>=0.19.1
 
 # =============================================================================
 # Gradient Boosting
