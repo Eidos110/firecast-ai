@@ -32,11 +32,17 @@ logger.info(f"Checking if build directory exists: {os.path.isdir(_BUILD_PATH)}")
 if os.path.isdir(_BUILD_PATH):
     logger.info(f"Build contents: {os.listdir(_BUILD_PATH)}")
 
-# 1. Declare component (path ke folder build frontend)
-InteractiveMap = components.declare_component(
-    "interactive_map",
-    path=_BUILD_PATH,
-)
+InteractiveMap = None
+if os.path.isdir(_BUILD_PATH):
+    try:
+        InteractiveMap = components.declare_component(
+            "interactive_map",
+            path=_BUILD_PATH,
+        )
+    except Exception as exc:
+        logger.warning("Failed to register interactive_map component: %s", exc)
+else:
+    logger.warning("Interactive map build directory missing: %s", _BUILD_PATH)
 
 
 def initialize_session_state():
@@ -68,7 +74,10 @@ def render_interactive_map(height=600, prediction_overlay=None):
     """
     initialize_session_state()
 
-    # Render the component
+    if InteractiveMap is None:
+        st.warning("Interactive map is unavailable in this deployment because the map component build is missing.")
+        return {"type": "placeholder", "lat": None, "lng": None}
+
     map_output = InteractiveMap(
         height=height,
         predictionOverlay=prediction_overlay,
