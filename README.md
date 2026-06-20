@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-teal.svg)](http://localhost:8000/docs)
 [![Streamlit](https://img.shields.io/badge/Streamlit-UI-red.svg)](http://localhost:8501)
 
-FireCast is an advanced fire forecasting and risk prediction system. It combines a **Convolutional Neural Network (CNN)** with **LightGBM** — an ensemble of deep learning and gradient boosting — to estimate fire risk using meteorological, spectral, and temporal features in real time.
+FireCast is an advanced fire forecasting and risk prediction system. It combines an ensemble of **deep learning and gradient boosting** — to estimate fire risk using meteorological, spectral, and temporal features in near real time.
 
 ---
 
