@@ -33,7 +33,7 @@ services:
     name: firecast-frontend
     runtime: python-3.9
     plan: free
-    buildCommand: pip install -r requirements.txt -r requirements-frontend.txt
+    buildCommand: chmod +x render-build.sh && bash render-build.sh
     startCommand: streamlit run frontend/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
     envVars:
       - key: APP_ENV
