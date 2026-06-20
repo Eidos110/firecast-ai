@@ -4,7 +4,7 @@ services:
     runtime: python-3.9
     plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python -m uvicorn src.geo_api:app --host 0.0.0.0 --port $PORT --log-level info
+    startCommand: python /app/start_api.py
     envVars:
       - key: APP_ENV
         value: production
