@@ -47,8 +47,8 @@ def check_environment():
     issues = []
     
     # Check Python version
-    if sys.version_info < (3, 8):
-        issues.append("Python 3.8 or higher is required")
+    if sys.version_info < (3, 10):
+        issues.append("Python 3.10 or higher is required")
     
     # Check for .env file
     if not (project_root / '.env').exists():
