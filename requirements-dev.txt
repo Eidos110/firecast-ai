@@ -1,5 +1,6 @@
 # FireCast Development Dependencies
 # Install with: pip install -r requirements-dev.txt
+# Requires: requirements.txt installed first (core app deps).
 
 # Testing
 pytest>=7.4.0
@@ -7,33 +8,28 @@ pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0
 hypothesis>=6.88.0
+httpx>=0.25.0  # required for FastAPI TestClient
 
-# Code Quality
-black>=23.0.0
-isort>=5.12.0
-flake8>=6.1.0
-mypy>=1.6.0
-pylint>=3.0.0
+# Code Quality (synced with pyproject.toml [tool.ruff] / [tool.black])
+ruff>=0.6.0       # replaces flake8 + isort + pyupgrade
+black>=24.0.0
+mypy>=1.10.0
+pre-commit>=3.5.0
 
-# Jupyter & Development Tools
+# Type stubs (optional but improves mypy)
+pandas-stubs>=2.2
+types-requests>=2.31
+types-PyYAML>=6.0
+
+# Jupyter & notebook tooling
 jupyter>=1.0.0
 ipython>=8.14.0
 ipykernel>=6.25.0
-notebook>=7.0.0
+nbstripout>=0.7.0  # strip notebook output before commit
 
-# Documentation
-sphinx>=7.1.0
-sphinx-rtd-theme>=1.3.0
+# Database migrations
+yoyo-migrations>=8.2  # required by migrations/*.py
 
-# Pre-commit Hooks
-pre-commit>=3.5.0
-
-# Debugging
+# Debugging & profiling
 debugpy>=1.8.0
-
-# Profiling
 memory-profiler>=0.61.0
-line-profiler>=4.1.0
-
-# Note: This file includes only development-specific dependencies.
-# Install requirements.txt first for core dependencies.

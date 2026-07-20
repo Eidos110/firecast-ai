@@ -33,16 +33,38 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy>=1.24.3",
+    "numpy>=2.0.0",
     "pandas>=2.0.3",
-    "scikit-learn>=1.3.0",
-    "torch>=1.10.2",
-    "lightgbm==3.3.5",
+    "scikit-learn>=1.9.0",
+    "torch>=2.4.1",
+    "lightgbm==4.6.0",
+    "xgboost==3.3.0",
+    "shap>=0.45.0",
     "joblib>=1.3.1",
     "matplotlib>=3.7.2",
     "seaborn>=0.12.2",
     "tqdm>=4.66.1",
     "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "requests>=2.31.0",
+    # Geospatial
+    "shapely>=2.0.0",
+    "geopandas>=0.14.0",
+    "h3>=3.7.6",
+    # Frontend
+    "streamlit>=1.28.0",
+    "folium>=0.14.0",
+    "streamlit-folium>=0.15.0",
+    "plotly>=5.15.0",
+    "pillow>=10.0.0",
+    "sqlmodel>=0.0.14",
+    "earthengine-api>=0.1.371",
+    # API
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.6",
+    "apscheduler>=3.10.4",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
@@ -50,8 +72,15 @@ dev = [
     "jupyter>=1.0.0",
     "ipython>=8.14.0",
     "pytest>=7.0.0",
-    "black>=23.0.0",
-    "flake8>=6.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "ruff>=0.6.0",
+    "black>=24.0.0",
+    "mypy>=1.10.0",
+    "pre-commit>=3.5.0",
+    "yoyo-migrations>=8.2",
+    "nbstripout>=0.7.0",
 ]
 
 [project.urls]
@@ -64,7 +93,7 @@ Issues = "https://github.com/yourusername/firecast/issues"
 firecast = "main:main"
 
 [tool.setuptools]
-packages = ["src", "src.models"]
+packages = ["src", "src.models", "src.api"]
 
 [tool.black]
 line-length = 100
@@ -87,3 +116,20 @@ extend-exclude = '''
 [tool.isort]
 profile = "black"
 line_length = 100
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks", "firecast-private", "tmp-space-deploy", "frontend_react/build", "frontend_react/node_modules"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line-too-long handled by black
+    "B008",   # function-call-in-default-argument (FastAPI Security() pattern)
+    "SIM108", # ternary instead of if-else (readability)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert ok in tests
+"src/config.py" = ["E402"]  # late imports intentional

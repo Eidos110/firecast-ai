@@ -8,10 +8,11 @@
 
 # =============================================================================
 # Core Data Science
-# =============================================================================
-numpy>=1.24.3
+# Pinned to match training runtime env (FIREvCPU: py3.12 CPU) to avoid
+# pickle InconsistentVersion warnings from sklearn/xgboost/lightgbm.
+numpy>=2.0.0
 pandas>=2.0.3
-scikit-learn>=1.3.0
+scikit-learn>=1.9.0
 
 # =============================================================================
 # Geospatial Libraries
@@ -33,8 +34,10 @@ torchvision>=0.19.1
 # =============================================================================
 # Gradient Boosting
 # =============================================================================
-lightgbm==3.3.5
-xgboost>=2.0.0
+# lightgbm 3.3.5 was for legacy pickle compat, but no 3.3.5 wheel exists for
+# py3.12. Pin to runtime 4.6.0 to match trained stacking model.
+lightgbm==4.6.0
+xgboost==3.3.0
 
 # =============================================================================
 # Model Persistence
@@ -50,7 +53,8 @@ seaborn>=0.12.2
 # =============================================================================
 # ML Metrics (SHAP)
 # =============================================================================
-shap>=0.41.0
+# shap>=0.45 fixes numpy 2.x dtype bug; 0.46 verified working at runtime.
+shap>=0.45.0
 
 # =============================================================================
 # Configuration & Environment
