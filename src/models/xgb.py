@@ -5,15 +5,14 @@ Provides functions to load and run XGBoost predictions.
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
 
-import numpy as np
 import joblib
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def load_xgb_model(model_path: Union[str, Path]) -> any:
+def load_xgb_model(model_path: str | Path) -> any:
     """
     Load XGBoost model from pickle file.
 
@@ -82,8 +81,9 @@ def predict_xgb(
 
 
 if __name__ == "__main__":
-    import sys
     import logging
+    import sys
+
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 

@@ -7,9 +7,11 @@ __version__ = "1.0.0"
 __author__ = "FireCast Team"
 
 # Lazy safe imports at module level
-from . import config          # safe – no torch at top-level any more
-from . import utils           # safe – utilities
-from . import data_loader     # safe – data loading
+from . import (
+    config,  # safe – no torch at top-level any more
+    data_loader,  # safe – data loading
+    utils,  # safe – utilities
+)
 
 # Heavy/dependent imports are lazy to survive Railway's sandbox restrictions
 # (PyTorch 1.10.2 triggers: libtorch_cpu.so: cannot enable executable stack there)

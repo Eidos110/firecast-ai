@@ -2,12 +2,14 @@
 FireCast Lite Launcher
 Patches PyTorch execstack issue on Railway, then launches the app.
 """
-import subprocess
-import os
-import sys
+
+import contextlib
 import logging
+import os
+import subprocess
 
 logger = logging.getLogger(__name__)
+
 
 def _patch_libtorch():
     """Patch libtorch_cpu.so with execstack to allow executable stack on Railway."""
@@ -17,13 +19,14 @@ def _patch_libtorch():
     for lib in lib_paths:
         if os.path.exists(lib):
             # Try patchelf first (more reliable)
-            try:
-                result = subprocess.run(
+            with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired):
+                subprocess.run(
                     ["patchelf", "--set-interpreter", "/lib64/ld-linux-x86-64.so.2", lib],
-                    capture_output=True, text=True, timeout=5
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
                 )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
     return True
 
 
@@ -35,11 +38,11 @@ def main():
     torch_lib = "/usr/local/lib/python3.9/site-packages/torch/lib/libtorch_cpu.so"
     os.environ["LD_PRELOAD"] = torch_lib
     os.environ["LD_LIBRARY_PATH"] = (
-        "/usr/local/lib/python3.9/site-packages/torch/lib:"
-        + os.environ.get("LD_LIBRARY_PATH", "")
+        "/usr/local/lib/python3.9/site-packages/torch/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
     )
 
     import uvicorn
+
     uvicorn.run(
         "src.geo_api:app",
         host=os.getenv("API_HOST", "0.0.0.0"),

@@ -4,26 +4,28 @@ Provides functions to register, retrieve, and manage model versions.
 """
 
 from __future__ import annotations
+
 import json
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Import ModelVersion from database to avoid duplicate class definitions
-from src.database import ModelVersion
-from src import config
+from src import config  # noqa: E402
+from src.database import ModelVersion  # noqa: E402
 
 
-def get_active_model_version(model_name: str) -> Optional[Any]:
+def get_active_model_version(model_name: str) -> Any | None:
     """
     Get the active version for a specific model.
     """
     try:
-        from src.database import get_engine, init_db, select
         from sqlmodel import Session
+
+        from src.database import get_engine, init_db, select
 
         init_db()
         engine = get_engine()
@@ -48,11 +50,12 @@ def get_active_model_version(model_name: str) -> Optional[Any]:
         return None
 
 
-def get_model_path(model_name: str, version: Optional[str] = None) -> Optional[str]:
+def get_model_path(model_name: str, version: str | None = None) -> str | None:
     """Get the file path for a model version, with path traversal protection."""
     try:
-        from src.database import get_engine, init_db, select
         from sqlmodel import Session
+
+        from src.database import get_engine, init_db, select
 
         init_db()
         engine = get_engine()
@@ -81,17 +84,28 @@ def get_model_path(model_name: str, version: Optional[str] = None) -> Optional[s
                     .limit(1)
                 )
             result = session.exec(stmt).first()
-            
-            # Validate path to prevent directory traversal
+
+            # Validate path to prevent directory traversal.
+            # The whitelist must mirror ``register_model_version``'s allowed
+            # roots (audit Fase 1g): both ``models/`` (legacy CNN+LGBM stack)
+            # AND ``add_new_model/`` (new stacking: lgb/xgb/meta/causal_gru) are
+            # legitimate storage locations. A model registered under
+            # ``add_new_model/`` would otherwise be silently inaccessible here.
             if result:
                 try:
-                    models_dir = Path(config.get_config().paths.models_dir).resolve()
+                    cfg = config.get_config()
+                    allowed_roots = [
+                        Path(cfg.paths.models_dir).resolve(),
+                        Path(cfg.paths.new_model_dir).resolve(),
+                    ]
                     file_path_resolved = Path(result).resolve()
-                    # Ensure the resolved path is within models_dir
-                    file_path_resolved.relative_to(models_dir)
-                    return str(file_path_resolved)
-                except ValueError:
-                    logger.error(f"Path traversal detected: {result} is outside models directory")
+                    # Ensure the resolved path is within at least one root.
+                    if any(_safe_relative_to(file_path_resolved, root) for root in allowed_roots):
+                        return str(file_path_resolved)
+                    logger.error(
+                        f"Path traversal detected (or path outside whitelist): "
+                        f"{result} is not under {allowed_roots}"
+                    )
                     return None
                 except Exception as e:
                     logger.error(f"Error validating model path: {e}")
@@ -107,13 +121,14 @@ def register_model_version(
     model_name: str,
     version: str,
     file_path: str,
-    metadata: Optional[Dict[str, Any]] = None,
-    performance_metrics: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
+    performance_metrics: dict[str, Any] | None = None,
 ) -> bool:
     """Register a new model version."""
     try:
-        from src.database import get_engine, init_db
         from sqlmodel import Session
+
+        from src.database import get_engine, init_db
 
         init_db()
         engine = get_engine()
@@ -121,9 +136,7 @@ def register_model_version(
             return False
 
         metadata_json = json.dumps(metadata) if metadata else None
-        performance_json = (
-            json.dumps(performance_metrics) if performance_metrics else None
-        )
+        performance_json = json.dumps(performance_metrics) if performance_metrics else None
 
         new_version = ModelVersion(
             model_name=model_name,
@@ -146,11 +159,12 @@ def register_model_version(
         return False
 
 
-def get_model_versions(model_name: str, limit: int = 10) -> List[Any]:
+def get_model_versions(model_name: str, limit: int = 10) -> list[Any]:
     """Get model versions for a specific model."""
     try:
-        from src.database import get_engine, init_db, select
         from sqlmodel import Session
+
+        from src.database import get_engine, init_db, select
 
         init_db()
         engine = get_engine()
@@ -175,8 +189,9 @@ def get_model_versions(model_name: str, limit: int = 10) -> List[Any]:
 def activate_model_version(model_name: str, version: str) -> bool:
     """Activate a specific version for a model."""
     try:
-        from src.database import get_engine, init_db
         from sqlmodel import Session, update
+
+        from src.database import get_engine, init_db
 
         init_db()
         engine = get_engine()

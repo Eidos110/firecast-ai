@@ -4,13 +4,11 @@ FireCast Configuration Module
 Unified configuration management with environment variable support.
 """
 
-import os
-import sys
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
+import os
 from dataclasses import dataclass, field
-import threading
+from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -24,25 +22,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # ── Lazy torch import ──
 # Railway/CPU environments may hit: ImportError: libtorch_cpu.so: cannot enable
-# executable stack. We catch that and run in torch-less (demo/API-only) mode.
-_torch_module = None
-_torch_lock = threading.Lock()
-
+# executable stack. We centralise the lazy-load in ``src.utils.lazy`` so every
+# backend module shares one cached torch instance (avoids triplicate helpers).
 def _get_torch():
-    """Return torch module, loading it on first call. Returns None if unavailable."""
-    global _torch_module
-    if _torch_module is not None:
-        return _torch_module
-    with _torch_lock:
-        if _torch_module is None:
-            try:
-                import torch as _t  # type: ignore
-                _torch_module = _t
-            except (ImportError, OSError):
-                pass  # Railway: torch execstack blocked or not installed; run in demo mode
-        return _torch_module
+    """Thin wrapper around the shared ``src.utils.lazy.get_torch`` helper.
+
+    Returns the torch module (``None`` if unavailable) so existing legacy
+    references ``config._get_torch()`` continue to work unchanged.
+    """
+    from src.utils.lazy import get_torch as _shared_get_torch
+
+    torch_mod, _nn_mod = _shared_get_torch()
+    return torch_mod
 
 
 def _get_float_env(key: str, default: float) -> float:
@@ -90,6 +84,11 @@ class PathsConfig:
     @property
     def data_path(self) -> Path:
         return self.data_dir / "firecast_data_readymodelling_final_V3.csv"
+
+    @property
+    def processed_features_path(self) -> Path:
+        """Derived/inference-ready features CSV used by geo_api.py cache."""
+        return self.data_dir / "processed_firecast_features_v3.csv"
 
     @property
     def cnn_model_path(self) -> Path:
@@ -165,12 +164,8 @@ class ModelConfig:
     """Machine learning model configuration."""
 
     device: str = field(default_factory=lambda: os.getenv("ML_DEVICE", "auto"))
-    cnn_dropout: float = field(
-        default_factory=lambda: _get_float_env("CNN_DROPOUT", 0.3)
-    )
-    target_recall: float = field(
-        default_factory=lambda: _get_float_env("TARGET_RECALL", 0.80)
-    )
+    cnn_dropout: float = field(default_factory=lambda: _get_float_env("CNN_DROPOUT", 0.3))
+    target_recall: float = field(default_factory=lambda: _get_float_env("TARGET_RECALL", 0.80))
 
     @property
     def torch_device(self):  # type: ignore[override]
@@ -178,6 +173,7 @@ class ModelConfig:
         torch = _get_torch()
         if torch is None:
             import logging
+
             logging.warning("PyTorch not available; ML features disabled.")
             return "cpu"
         if self.device == "auto":
@@ -189,13 +185,9 @@ class ModelConfig:
 class DataConfig:
     """Data processing configuration."""
 
-    train_split: float = field(
-        default_factory=lambda: _get_float_env("TRAIN_SPLIT", 0.9)
-    )
+    train_split: float = field(default_factory=lambda: _get_float_env("TRAIN_SPLIT", 0.9))
     lag: int = field(default_factory=lambda: _get_int_env("LAG_DAYS", 3))
-    roll_window: int = field(
-        default_factory=lambda: _get_int_env("ROLLING_WINDOW", 7)
-    )
+    roll_window: int = field(default_factory=lambda: _get_int_env("ROLLING_WINDOW", 7))
 
 
 @dataclass
@@ -207,9 +199,7 @@ class APIConfig:
     enable_cors: bool = field(
         default_factory=lambda: os.getenv("ENABLE_CORS", "true").lower() == "true"
     )
-    secret_key: Optional[str] = field(
-        default_factory=lambda: os.getenv("API_SECRET_KEY")
-    )
+    secret_key: str | None = field(default_factory=lambda: os.getenv("API_SECRET_KEY"))
 
 
 @dataclass
@@ -217,9 +207,7 @@ class FrontendConfig:
     """Frontend (Streamlit) configuration."""
 
     port: int = field(default_factory=lambda: _get_int_env("STREAMLIT_PORT", 8501))
-    address: str = field(
-        default_factory=lambda: os.getenv("STREAMLIT_ADDRESS", "localhost")
-    )
+    address: str = field(default_factory=lambda: os.getenv("STREAMLIT_ADDRESS", "localhost"))
     enable_demo_mode: bool = field(
         default_factory=lambda: os.getenv("ENABLE_DEMO_MODE", "false").lower() == "true"
     )
@@ -229,9 +217,7 @@ class FrontendConfig:
 class WeatherAPIConfig:
     """Weather API configuration."""
 
-    openweather_key: Optional[str] = field(
-        default_factory=lambda: os.getenv("OPENWEATHER_API_KEY")
-    )
+    openweather_key: str | None = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY"))
     openweather_url: str = "https://api.openweathermap.org/data/2.5"
     bmkg_url: str = "https://api.bmkg.go.id/publik"
 
@@ -274,21 +260,34 @@ class FireCastConfig:
 
         # Validate split ratio
         if not 0 < self.data.train_split < 1:
-            raise ValueError(
-                f"TRAIN_SPLIT must be between 0 and 1, got {self.data.train_split}"
-            )
+            raise ValueError(f"TRAIN_SPLIT must be between 0 and 1, got {self.data.train_split}")
 
-        # Log configuration status
-        logger.info(f"Configuration loaded successfully")
-        logger.info(f"Device: {self.model.torch_device}")
+        # Log configuration status. NOTE: we intentionally do NOT resolve
+        # ``self.model.torch_device`` here — that would eagerly import torch
+        # at module load time (slow + breaks Railway sandbox). The device is
+        # resolved lazily on first access by code that actually needs it.
+        logger.info("Configuration loaded successfully")
         logger.info(f"Data path: {self.paths.data_path}")
 
         if not self.weather.has_openweather_key:
-            logger.warning(
-                "OpenWeather API key not configured - will use demo/backup data"
-            )
+            logger.warning("OpenWeather API key not configured - will use demo/backup data")
 
-    def to_dict(self) -> Dict[str, Any]:
+    @property
+    def device_str(self) -> str:
+        """Return the configured ML device as a string without forcing torch import.
+
+        Mirrors :pyattr:`ModelConfig.torch_device` but never raises (returns
+        ``"cpu"`` if torch is unavailable). Useful for ``logging`` /
+        ``to_dict`` contexts where importing torch would be undesirable.
+        """
+        if self.model.device == "auto":
+            torch_mod = _get_torch()
+            if torch_mod is None:
+                return "cpu"
+            return "cuda" if torch_mod.cuda.is_available() else "cpu"
+        return self.model.device
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary (for debugging)."""
         return {
             "paths": {
@@ -297,7 +296,7 @@ class FireCastConfig:
                 "models_dir": str(self.paths.models_dir),
             },
             "model": {
-                "device": str(self.model.torch_device),
+                "device": self.device_str,
                 "cnn_dropout": self.model.cnn_dropout,
                 "target_recall": self.model.target_recall,
             },
@@ -322,7 +321,7 @@ class FireCastConfig:
 
 
 # Global configuration instance (lazy loading)
-_config_instance: Optional[FireCastConfig] = None
+_config_instance: FireCastConfig | None = None
 
 
 def get_config() -> FireCastConfig:
@@ -375,12 +374,45 @@ def _init_legacy_vars():
     ROLL_WINDOW = cfg.data.roll_window
 
     CNN_DROPOUT = cfg.model.cnn_dropout
-    DEVICE = cfg.model.torch_device
+    # NOTE: DEVICE is intentionally NOT set here to avoid eagerly importing
+    # torch at module load time. It is resolved lazily on first attribute
+    # access via the module-level ``__getattr__`` below.
     TARGET_RECALL = cfg.model.target_recall
 
 
-# Initialize legacy variables on module load
+# Initialize legacy variables on module load (torch-free path).
 _init_legacy_vars()
+
+
+def _resolve_device():
+    """Resolve the runtime ML device string, importing torch on demand.
+
+    Returns ``"cpu"`` if torch is unavailable (Railway sandbox).
+    """
+    torch_mod = _get_torch()
+    if torch_mod is None:
+        return "cpu"
+    # cfg.model.device is "auto" by default → pick cuda if available
+    config_device = get_config().model.device
+    if config_device and config_device != "auto":
+        return config_device
+    return "cuda" if torch_mod.cuda.is_available() else "cpu"
+
+
+def __getattr__(name):
+    """Lazy module attribute hook.
+
+    Currently used to lazily resolve ``DEVICE`` on first access so that
+    importing ``src.config`` does NOT eagerly import torch (preserves the
+    Railway sandbox survival guarantee documented in AGENTS §3).
+    """
+    if name == "DEVICE":
+        device_value = _resolve_device()
+        # Cache as a real module attribute so subsequent lookups bypass
+        # ``__getattr__`` (allows ``config.DEVICE = ...`` overrides too).
+        globals()["DEVICE"] = device_value
+        return device_value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

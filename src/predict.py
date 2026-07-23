@@ -9,39 +9,45 @@ import logging
 import math
 import os
 import pickle
-from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, Optional, Union
+import sys  # for module-global scope access in _init_models()
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
-from sklearn.preprocessing import StandardScaler
 
 from src import config
 from src.data_loader import load_data_for_evaluation
 from src.feature_engineering import engineer_features
-import sys  # for module-global scope access in _init_models()
 
 # ── Lazy torch / model imports ──
 # Railway/CPU envs: PyTorch 1.10.2 fails with
 # "libtorch_cpu.so: cannot enable executable stack".
 # We use lazy imports so the app still starts (in demo mode).
 # Call _init_models() before calling predict functions.
+# Audit Fase 3d: consolidate the torch lazy-loader with the shared one in
+# ``src.utils.lazy``. Previously this module had its own private ``_get_torch``
+# that only caught ``ImportError`` (not ``OSError`` — which is what Railway/
+# HF Spaces raise when the execstack policy blocks ``libtorch_cpu.so``).
+# Adding a try/except shim that returns the pinned shared implementation.
+from src.utils.lazy import get_torch as _shared_get_torch
 
 _torch = None
 _cnn_module = None
 
 
 def _get_torch():
-    """Return torch module lazily. Returns None if unavailable (Railway)."""
+    """Return torch module lazily. Returns None if unavailable.
+
+    Delegates to :func:`src.utils.lazy.get_torch` so Railway/HF Spaces
+    workers (where ``import torch`` raises ``OSError`` from the execstack
+    block) degrade to demo mode instead of raising.
+    """
     global _torch
     if _torch is None:
-        try:
-            import torch as _t
-            _torch = _t
-        except ImportError:
-            pass  # Railway execstack restriction
+        _torch, _ = _shared_get_torch()
     return _torch
 
 
@@ -54,12 +60,13 @@ def _init_models():
     """
     _mod = sys.modules[__name__]
     try:
-        from src.models.cnn import TunedCNN1D, load_cnn_model  # noqa: F401
-        from src.models.lgbm import load_lgbm_model             # noqa: F401
-        from src.models.xgb import load_xgb_model, predict_xgb  # noqa: F401
         from src.models.bigru import load_bigru_model, predict_bigru  # noqa: F401
         from src.models.causal_gru import load_causal_gru_model, predict_causal_gru  # noqa: F401
-        from src.models.ensemble import evaluate_ensemble       # noqa: F401
+        from src.models.cnn import TunedCNN1D, load_cnn_model  # noqa: F401
+        from src.models.ensemble import evaluate_ensemble  # noqa: F401
+        from src.models.lgbm import load_lgbm_model  # noqa: F401
+        from src.models.xgb import load_xgb_model, predict_xgb  # noqa: F401
+
         # Register in module globals so outer functions can find them
         _mod.load_cnn_model = load_cnn_model
         _mod.load_lgbm_model = load_lgbm_model
@@ -78,6 +85,7 @@ def _init_models():
         return False
     return True
 
+
 logger = logging.getLogger(__name__)
 
 # Weighted ensemble weights for LGBM+XGB (computed from validation AUCs)
@@ -86,22 +94,24 @@ _WEIGHTS_LGBM_XGB = np.array([0.8834, 0.8855])
 _WEIGHTS_LGBM_XGB = _WEIGHTS_LGBM_XGB / _WEIGHTS_LGBM_XGB.sum()
 
 # Flag to enable/disable Causal GRU for AOI predictions (no historical data).
-# Set environment variable USE_CAUSAL_GRU_AOI=false to force disable (fall back to LGBM+XGB).
-USE_CAUSAL_GRU_AOI = os.getenv('USE_CAUSAL_GRU_AOI', 'true').lower() != 'false'
+# Set environment variable USE_CAUSAL_GRU_AOI=false to force disable (fall back
+# to LGBM+XGB). The legacy alias ``USE_BIGRU_AOI`` was removed (audit Fase 1i /
+# AGENTS.md §5C): it only mirrored ``USE_CAUSAL_GRU_AOI`` and the dual-env read
+# ``USE_BIGRU_AOI`` OR ``USE_CAUSAL_GRU_AOI`` made operator behaviour ambiguous.
+USE_CAUSAL_GRU_AOI = os.getenv("USE_CAUSAL_GRU_AOI", "true").lower() != "false"
 
-# Backward compatibility alias
-USE_BIGRU_AOI = os.getenv('USE_BIGRU_AOI', os.getenv('USE_CAUSAL_GRU_AOI', 'true')).lower() != 'false'
 
-
-def _safe_divide(numerator: Union[float, np.ndarray], denominator: Union[float, np.ndarray], epsilon: float = 1e-8) -> Union[float, np.ndarray]:
+def _safe_divide(
+    numerator: float | np.ndarray, denominator: float | np.ndarray, epsilon: float = 1e-8
+) -> float | np.ndarray:
     """
     Safe division to prevent division by zero and numerical overflow.
-    
+
     Args:
         numerator: Numerator value(s)
         denominator: Denominator value(s)
         epsilon: Small value to add to denominator for numerical stability
-        
+
     Returns:
         Result of numerator / (denominator + epsilon), clipped to prevent infinities.
     """
@@ -127,14 +137,12 @@ class ModelLoadError(Exception):
 
 
 # Registry for model version management – safe (registry.py has no torch import)
-from src.models import registry
+from src.models import registry  # noqa: E402
 
 # ── End of safe module-level imports ──
 
 
-def load_ensemble_models(
-    input_dim: int, version: Optional[str] = None
-) -> Tuple[Any, Any]:
+def load_ensemble_models(input_dim: int, version: str | None = None) -> tuple[Any, Any]:
     """
     Load both CNN and LightGBM models.
 
@@ -153,9 +161,7 @@ def load_ensemble_models(
         from src.models.cnn import load_cnn_model  # noqa
         from src.models.lgbm import load_lgbm_model  # noqa
     except ImportError as e:
-        raise ModelLoadError(
-            f"Cannot import model loaders (torch unavailable on Railway?): {e}"
-        )
+        raise ModelLoadError(f"Cannot import model loaders (torch unavailable on Railway?): {e}")
 
     # Try registry first, fallback to direct paths if not found
     try:
@@ -189,8 +195,8 @@ def load_ensemble_models(
 
 
 def load_stacking_models(
-    input_dim: int = 79, raw_feature_indices: Optional[list] = None
-) -> Tuple[Any, Any, Any, Any, Any, Any, Any, Optional[np.ndarray]]:
+    input_dim: int = 79, raw_feature_indices: list | None = None
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, np.ndarray | None]:
     """
     Load new stacking model components (LightGBM, XGBoost, Causal GRU, Meta-learner, scaler_raw, meta_scaler, raw_feature_indices).
 
@@ -210,9 +216,9 @@ def load_stacking_models(
     # a runtime dependency. Without these, the bare call at lines 277/283/291
     # raises a NameError when _init_models() has not yet run.
     try:
+        from src.models.causal_gru import load_causal_gru_model, predict_causal_gru  # noqa: F401
         from src.models.lgbm import load_lgbm_model  # noqa: F401
         from src.models.xgb import load_xgb_model, predict_xgb  # noqa: F401
-        from src.models.causal_gru import load_causal_gru_model, predict_causal_gru  # noqa: F401
     except ImportError as _e:
         raise ModelLoadError(
             f"Cannot import stacking model loaders (torch/model deps missing?): {_e}"
@@ -228,7 +234,7 @@ def load_stacking_models(
     # Load raw feature indices if not provided
     if raw_feature_indices is None:
         try:
-            with open(config.NEW_RAW_FEATURES_PATH, 'r', encoding='utf-8') as f:
+            with open(config.NEW_RAW_FEATURES_PATH, encoding="utf-8") as f:
                 raw_features = json.load(f)
             # Validate raw_features structure
             if not isinstance(raw_features, list):
@@ -237,7 +243,7 @@ def load_stacking_models(
                 raise ValueError("raw_features.json array items must be strings")
             # Load feature columns to map names to integer indices
             try:
-                with open(config.NEW_FEATURE_COLUMNS_PATH, 'r', encoding='utf-8') as f:
+                with open(config.NEW_FEATURE_COLUMNS_PATH, encoding="utf-8") as f:
                     feature_columns = json.load(f)
                 # Validate feature_columns structure
                 if not isinstance(feature_columns, list):
@@ -257,11 +263,15 @@ def load_stacking_models(
                         f"expected {len(raw_features)}, got {len(raw_feature_indices)}"
                     )
             except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Could not load feature_columns.json: {e}. Using sequential indices.")
+                logger.warning(
+                    f"Could not load feature_columns.json: {e}. Using sequential indices."
+                )
                 # Fallback: assign sequential indices (may be wrong but allows model to load)
                 raw_feature_indices = list(range(len(raw_features)))
         except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Could not load raw_features.json: {e}. Using first {input_dim} features.")
+            logger.warning(
+                f"Could not load raw_features.json: {e}. Using first {input_dim} features."
+            )
             raw_feature_indices = list(range(input_dim))
 
     # Determine causal_gru_input_dim from model_config.json (Bug #5 fix)
@@ -269,7 +279,7 @@ def load_stacking_models(
     causal_gru_hidden1 = 64
     causal_gru_dropout = 0.3
     try:
-        with open(Path(config.NEW_MODEL_DIR) / "model_config.json", 'r', encoding='utf-8') as f:
+        with open(Path(config.NEW_MODEL_DIR) / "model_config.json", encoding="utf-8") as f:
             model_config = json.load(f)
             if not isinstance(model_config, dict):
                 raise ValueError("model_config.json must be a JSON object")
@@ -284,10 +294,19 @@ def load_stacking_models(
                 raise ValueError("causal_gru_input_dim must be a positive integer")
             if not isinstance(causal_gru_hidden1, int) or causal_gru_hidden1 <= 0:
                 raise ValueError("causal_gru_hidden1 must be a positive integer")
-            if not isinstance(causal_gru_dropout, (int, float)) or not (0 <= causal_gru_dropout <= 1):
+            if not isinstance(causal_gru_dropout, (int, float)) or not (
+                0 <= causal_gru_dropout <= 1
+            ):
                 raise ValueError("causal_gru_dropout must be a number between 0 and 1")
             logger.info(f"Causal GRU input dimension from config: {causal_gru_input_dim}")
-    except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError, KeyError, TypeError) as e:
+    except (
+        FileNotFoundError,
+        PermissionError,
+        json.JSONDecodeError,
+        OSError,
+        KeyError,
+        TypeError,
+    ) as e:
         logger.warning(f"Could not read model_config.json: {e}. Using default input_dim=19.")
         causal_gru_input_dim = 19
 
@@ -372,7 +391,9 @@ def load_stacking_models(
         try:
             nnls_weights = np.load(nnls_weights_path)
             if nnls_weights.shape == (3,):
-                logger.info(f"NNLS weights loaded: GRU={nnls_weights[0]:.3f}, LGBM={nnls_weights[1]:.3f}, XGB={nnls_weights[2]:.3f}")
+                logger.info(
+                    f"NNLS weights loaded: GRU={nnls_weights[0]:.3f}, LGBM={nnls_weights[1]:.3f}, XGB={nnls_weights[2]:.3f}"
+                )
             else:
                 logger.warning(f"NNLS weights have wrong shape {nnls_weights.shape}, ignoring.")
                 nnls_weights = None
@@ -382,14 +403,16 @@ def load_stacking_models(
     else:
         logger.debug("NNLS weights not found (optional - uses LogisticRegression instead)")
 
-    # Temperature scaling factor to temper overconfident predictions
-    # Applied to sigmoid output: p_tempered = p ** (1/T) for T>1 reduces confidence
-    # Alternatively: convert to logit, divide by temp, sigmoid back.
-    INFERENCE_TEMPERATURE = float(os.getenv('INFERENCE_TEMPERATURE', '1.0'))
-    if INFERENCE_TEMPERATURE != 1.0:
-        logger.info(f"Inference temperature scaling enabled: T={INFERENCE_TEMPERATURE}")
-
-    return lgbm_model, xgb_model, causal_gru_model, meta_model, scaler_raw, meta_scaler, raw_feature_indices, nnls_weights
+    return (
+        lgbm_model,
+        xgb_model,
+        causal_gru_model,
+        meta_model,
+        scaler_raw,
+        meta_scaler,
+        raw_feature_indices,
+        nnls_weights,
+    )
 
 
 def load_new_model_scaler():
@@ -399,23 +422,23 @@ def load_new_model_scaler():
 
 def load_new_model_threshold() -> float:
     """Load optimal threshold for new model."""
-    with open(config.NEW_THRESHOLD_PATH, "r") as f:
+    with open(config.NEW_THRESHOLD_PATH) as f:
         threshold_config = json.load(f)
     return threshold_config.get("optimal_threshold", 0.5)
 
 
 def load_new_feature_columns() -> list:
     """Load feature columns for new model."""
-    with open(config.NEW_FEATURE_COLUMNS_PATH, "r") as f:
+    with open(config.NEW_FEATURE_COLUMNS_PATH) as f:
         return json.load(f)
 
 
 def predict_batch(
     X: np.ndarray,
-    cnn_model: Optional[Any] = None,
-    lgbm_model: Optional[Any] = None,
+    cnn_model: Any | None = None,
+    lgbm_model: Any | None = None,
     batch_size: int = 64,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Run batch prediction using ensemble model (legacy).
 
@@ -443,14 +466,10 @@ def predict_batch(
             raise RuntimeError("PyTorch not available — cannot run CNN prediction")
         with _torch.no_grad():
             for i in range(0, len(X), batch_size):
-                batch = _torch.tensor(X[i : i + batch_size], dtype=_torch.float32).to(
-                    config.DEVICE
-                )
+                batch = _torch.tensor(X[i : i + batch_size], dtype=_torch.float32).to(config.DEVICE)
                 logits = cnn_model(batch)
                 probs = _torch.sigmoid(logits).cpu().numpy()
-                logger.info(
-                    f"CNN batch logits: {logits[:3].cpu().numpy()}, probs: {probs[:3]}"
-                )
+                logger.info(f"CNN batch logits: {logits[:3].cpu().numpy()}, probs: {probs[:3]}")
                 cnn_probs.extend(probs)
         cnn_probs = np.array(cnn_probs).flatten()
         logger.info(f"CNN final probs: {cnn_probs[:5]}")
@@ -524,6 +543,7 @@ def load_meta_scaler() -> Any:
 # LGBM-safe prediction helper
 # ---------------------------------------------------------------------------
 
+
 def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) -> np.ndarray:
     """
     Predict fire-risk probabilities from a LightGBM model, handling *every*
@@ -551,6 +571,7 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
         # ── Path A: native lightgbm.Booster — direct raw→sigmoid pipeline ──
         try:
             from lightgbm import Booster as _LGBBooster
+
             is_booster = isinstance(lgbm_model, _LGBBooster)
         except ImportError:
             is_booster = False
@@ -564,9 +585,7 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
                 probs = 1.0 / (1.0 + np.exp(-np.asarray(raw, dtype=float)))
             else:
                 probs = np.clip(np.asarray(raw, dtype=float), 0.0, 1.0)
-            logger.info(
-                f"LGBM Booster → raw margin range [{probs.min():.4f}, {probs.max():.4f}]"
-            )
+            logger.info(f"LGBM Booster → raw margin range [{probs.min():.4f}, {probs.max():.4f}]")
             return np.clip(probs, 0.0, 1.0)
 
         # ── Path B: sklearn-compatible LGBMClassifier / wrapper ───────────
@@ -589,9 +608,7 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
                 return np.clip(arr, 0.0, 1.0)
 
     except Exception as e:
-        logger.warning(
-            f"_safe_lgbm_predict: all LGBM prediction paths failed ({e!r}). "
-        )
+        logger.warning(f"_safe_lgbm_predict: all LGBM prediction paths failed ({e!r}). ")
 
     # ── Universal fallback: neutral 0.5 probabilities ────────────────────
     logger.warning(
@@ -603,16 +620,16 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
 
 def predict_stacking(
     X: np.ndarray,
-    lgbm_model: Optional[Any] = None,
-    xgb_model: Optional[Any] = None,
-    causal_gru_model: Optional[Any] = None,
-    meta_model: Optional[Any] = None,
-    scaler_raw: Optional[Any] = None,
-    meta_scaler: Optional[Any] = None,
-    raw_feature_indices: Optional[list] = None,
+    lgbm_model: Any | None = None,
+    xgb_model: Any | None = None,
+    causal_gru_model: Any | None = None,
+    meta_model: Any | None = None,
+    scaler_raw: Any | None = None,
+    meta_scaler: Any | None = None,
+    raw_feature_indices: list | None = None,
     use_causal_gru: bool = True,
     seq_len: int = 7,
-    nnls_weights: Optional[np.ndarray] = None,
+    nnls_weights: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Run batch prediction using new stacking model (LGB + XGB + Causal GRU + NNLS meta).
@@ -644,30 +661,48 @@ def predict_stacking(
                     insufficient samples (n_samples < seq_len) when use_causal_gru=True.
     """
     # Load all models if not provided
-    if lgbm_model is None or xgb_model is None or causal_gru_model is None or meta_model is None or scaler_raw is None or raw_feature_indices is None:
-        (lgbm_model, xgb_model, causal_gru_model, meta_model, scaler_raw, meta_scaler,
-         raw_feature_indices, loaded_nnls_weights) = load_stacking_models(
-            X.shape[1]
-        )
+    if (
+        lgbm_model is None
+        or xgb_model is None
+        or causal_gru_model is None
+        or meta_model is None
+        or scaler_raw is None
+        or raw_feature_indices is None
+    ):
+        (
+            lgbm_model,
+            xgb_model,
+            causal_gru_model,
+            meta_model,
+            scaler_raw,
+            meta_scaler,
+            raw_feature_indices,
+            loaded_nnls_weights,
+        ) = load_stacking_models(X.shape[1])
         # If caller didn't provide nnls_weights, use the one just loaded (if any)
         if nnls_weights is None:
             nnls_weights = loaded_nnls_weights
 
     # Validate raw_feature_indices type - convert string names to int indices if needed
-    if raw_feature_indices is not None and len(raw_feature_indices) > 0:
-        if not isinstance(raw_feature_indices[0], (int, np.integer)):
-            # Convert feature names to column indices using feature_columns
-            try:
-                feature_columns = load_new_feature_columns()
-                raw_feature_indices = [
-                    i for i, col in enumerate(feature_columns) if col in raw_feature_indices
-                ]
-                logger.info(f"Converted {len(raw_feature_indices)} raw feature names to indices")
-                if len(raw_feature_indices) == 0:
-                    raise ValueError("No raw features found in feature_columns.json")
-            except Exception as e:
-                logger.error(f"Failed to convert raw feature names to indices: {e}")
-                raise ValueError("raw_feature_indices conversion failed. Check raw_features.json and feature_columns.json.") from e
+    if (
+        raw_feature_indices is not None
+        and len(raw_feature_indices) > 0
+        and not isinstance(raw_feature_indices[0], (int, np.integer))
+    ):
+        # Convert feature names to column indices using feature_columns
+        try:
+            feature_columns = load_new_feature_columns()
+            raw_feature_indices = [
+                i for i, col in enumerate(feature_columns) if col in raw_feature_indices
+            ]
+            logger.info(f"Converted {len(raw_feature_indices)} raw feature names to indices")
+            if len(raw_feature_indices) == 0:
+                raise ValueError("No raw features found in feature_columns.json")
+        except Exception as e:
+            logger.error(f"Failed to convert raw feature names to indices: {e}")
+            raise ValueError(
+                "raw_feature_indices conversion failed. Check raw_features.json and feature_columns.json."
+            ) from e
 
     # If Causal GRU disabled, use weighted LGBM+XGB ensemble (full length)
     if not use_causal_gru:
@@ -749,19 +784,21 @@ def predict_stacking(
     # Standardize meta-features if scaler is available (meta_scaler disabled to avoid saturation)
     meta_features = np.column_stack([gru_probs, lgbm_probs_aligned, xgb_probs_aligned])
     if meta_scaler is not None:
-        logger.warning("meta_scaler is not None - this may cause prediction saturation. Consider setting meta_scaler=None.")
+        logger.warning(
+            "meta_scaler is not None - this may cause prediction saturation. Consider setting meta_scaler=None."
+        )
         meta_features_scaled = meta_scaler.transform(meta_features)
     else:
         meta_features_scaled = meta_features
 
     # Decide whether to use NNLS weights instead of LogisticRegressionCV
-    use_nnls = (os.getenv('USE_NNLS_META', 'false').lower() == 'true')
+    use_nnls = os.getenv("USE_NNLS_META", "false").lower() == "true"
     if use_nnls and nnls_weights is not None and len(nnls_weights) == 3:
         logger.info("Using NNLS meta-learner (non-negative least squares weights)")
         ensemble_short = (
-            nnls_weights[0] * gru_probs +
-            nnls_weights[1] * lgbm_probs_aligned +
-            nnls_weights[2] * xgb_probs_aligned
+            nnls_weights[0] * gru_probs
+            + nnls_weights[1] * lgbm_probs_aligned
+            + nnls_weights[2] * xgb_probs_aligned
         )
     elif hasattr(meta_model, "predict_proba"):
         # LogisticRegression / LogisticRegressionCV path (new meta-learner)
@@ -777,7 +814,9 @@ def predict_stacking(
                 f"mean={ensemble_short.mean():.4f}, std={ensemble_short.std():.4f}"
             )
         except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.warning(f"LogisticRegression meta-learner failed: {e}. Falling back to NNLS/simple average.")
+            logger.warning(
+                f"LogisticRegression meta-learner failed: {e}. Falling back to NNLS/simple average."
+            )
             ensemble_short = (gru_probs + lgbm_probs_aligned + xgb_probs_aligned) / 3.0
     elif isinstance(meta_model, np.ndarray):
         # NNLS weights path (legacy backward compatibility)
@@ -800,9 +839,9 @@ def predict_stacking(
                 )
 
             ensemble_short = (
-                weights[0] * gru_probs +
-                weights[1] * lgbm_probs_aligned +
-                weights[2] * xgb_probs_aligned
+                weights[0] * gru_probs
+                + weights[1] * lgbm_probs_aligned
+                + weights[2] * xgb_probs_aligned
             )
             logger.info(
                 f"NNLS stacking (GRU={weights[0]:.3f}, LGBM={weights[1]:.3f}, XGB={weights[2]:.3f}): "
@@ -816,7 +855,7 @@ def predict_stacking(
 
     # Pad the beginning with NaN to align with original input length
     padded_output = np.full(X.shape[0], np.nan, dtype=float)
-    padded_output[effective_start:effective_start+len(ensemble_short)] = ensemble_short
+    padded_output[effective_start : effective_start + len(ensemble_short)] = ensemble_short
 
     # Ensure output probabilities are in valid range
     valid_mask = ~np.isnan(padded_output)
@@ -827,10 +866,10 @@ def predict_stacking(
 
 
 def predict_fire_risk(
-    features: Dict[str, Any],
-    model_version: Optional[str] = None,
+    features: dict[str, Any],
+    model_version: str | None = None,
     model_type: str = "new",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Predict fire risk from input features.
 
@@ -905,9 +944,7 @@ def predict_fire_risk(
                 feature_vector.shape[1], version=model_version
             )
 
-            cnn_probs, lgbm_probs = predict_batch(
-                feature_vector_scaled, cnn_model, lgbm_model
-            )
+            cnn_probs, lgbm_probs = predict_batch(feature_vector_scaled, cnn_model, lgbm_model)
 
             # Log detailed prediction values for debugging
             logger.info(f"Raw CNN probability: {cnn_probs[0]}")
@@ -923,10 +960,11 @@ def predict_fire_risk(
             model_name_used = "Model Ensemble"
 
             try:
-                with open(config.FEATURE_COLUMNS_PATH, "r") as f:
+                with open(config.FEATURE_COLUMNS_PATH) as f:
                     legacy_feature_cols = json.load(f)
                 shap_explanation = _compute_shap_explanation(
-                    features, lgbm_model,
+                    features,
+                    lgbm_model,
                     feature_vector=feature_vector_scaled,
                     feature_columns=legacy_feature_cols,
                 )
@@ -962,9 +1000,7 @@ def predict_fire_risk(
             try:
                 new_scaler = load_new_model_scaler()
                 feature_vector_scaled = new_scaler.transform(feature_vector)
-                logger.info(
-                    f"Scaled feature vector (first 10): {feature_vector_scaled[0][:10]}"
-                )
+                logger.info(f"Scaled feature vector (first 10): {feature_vector_scaled[0][:10]}")
             except Exception as e:
                 logger.warning(f"Could not load new scaler: {e}, using unscaled features")
                 feature_vector_scaled = feature_vector
@@ -984,8 +1020,10 @@ def predict_fire_risk(
 
             # Validate raw_feature_indices - must not be empty
             if raw_feature_indices is None or len(raw_feature_indices) == 0:
-                raise ValueError("No raw feature indices available. Cannot run Causal GRU model. "
-                                 "Check that raw_features.json and feature_columns.json exist and are valid.")  
+                raise ValueError(
+                    "No raw feature indices available. Cannot run Causal GRU model. "
+                    "Check that raw_features.json and feature_columns.json exist and are valid."
+                )
             else:
                 logger.info(f"Using {len(raw_feature_indices)} raw feature indices for Causal GRU")
 
@@ -1011,7 +1049,9 @@ def predict_fire_risk(
             except ValueError as e:
                 # Causal GRU requires minimum seq_len samples; fall back to LGBM+XGB
                 if "Not enough samples" in str(e) or "sequence length" in str(e).lower():
-                    logger.warning(f"Causal GRU cannot run (single sample or too few): {e}. Using LGBM+XGB ensemble.")
+                    logger.warning(
+                        f"Causal GRU cannot run (single sample or too few): {e}. Using LGBM+XGB ensemble."
+                    )
                     use_causal_gru_flag = False
                     ensemble_probs = predict_stacking(
                         feature_vector_scaled,
@@ -1040,14 +1080,18 @@ def predict_fire_risk(
                     f"All ensemble predictions are NaN. Input shape: {feature_vector_scaled.shape}, "
                     f"use_causal_gru: {use_causal_gru_flag}, raw indices valid: {raw_feature_indices is not None and len(raw_feature_indices) > 0}"
                 )
-                # Try fallback to LGBM prediction
+                # Try fallback to LGBM prediction (Audi Fase 1i: route through
+                # ``_safe_lgbm_predict`` so the same robustness path is used
+                # everywhere, instead of a bare ``lgbm_model.predict`` here).
                 try:
-                    lgbm_fallback = lgbm_model.predict(feature_vector_scaled)
-                    ensemble_prob = float(lgbm_fallback[0])
+                    lgbm_fallback = _safe_lgbm_predict(lgbm_model, feature_vector_scaled, None)
+                    ensemble_prob = float(np.atleast_1d(lgbm_fallback)[0])
                     logger.warning(f"Used LGBM fallback prediction: {ensemble_prob:.4f}")
                 except Exception as fallback_err:
                     logger.error(f"LGBM fallback also failed: {fallback_err}")
-                    raise ValueError("All ensemble predictions are NaN and fallback prediction failed")
+                    raise ValueError(
+                        "All ensemble predictions are NaN and fallback prediction failed"
+                    )
 
             logger.info(
                 f"Final ensemble_prob={ensemble_prob:.4f} (from {np.sum(valid_mask)} valid predictions, "
@@ -1057,16 +1101,18 @@ def predict_fire_risk(
             # --- Calibration: Temperature scaling & probability capping ---
             # Temperature scaling reduces overconfidence by scaling logits before sigmoid.
             # T > 1 softens probabilities toward 0.5; T < 1 makes more extreme.
-            temp = float(os.getenv('ENSEMBLE_TEMPERATURE', '1.0'))
+            temp = float(os.getenv("ENSEMBLE_TEMPERATURE", "1.0"))
             if temp != 1.0:
                 # Avoid exactly 0 or 1 which break logit
-                p_safe = np.clip(ensemble_prob, 1e-6, 1-1e-6)
+                p_safe = np.clip(ensemble_prob, 1e-6, 1 - 1e-6)
                 logit = np.log(p_safe / (1 - p_safe))
                 ensemble_prob = 1.0 / (1.0 + np.exp(-logit / temp))
-                logger.info(f"Applied temperature scaling (T={temp}): adjusted_prob={ensemble_prob:.4f}")
+                logger.info(
+                    f"Applied temperature scaling (T={temp}): adjusted_prob={ensemble_prob:.4f}"
+                )
 
             # Optional hard cap on maximum probability
-            max_prob = float(os.getenv('MAX_PROBABILITY', '1.0'))
+            max_prob = float(os.getenv("MAX_PROBABILITY", "1.0"))
             if max_prob < 1.0 and ensemble_prob > max_prob:
                 logger.warning(f"Capping probability from {ensemble_prob:.4f} to {max_prob:.4f}")
                 ensemble_prob = max_prob
@@ -1084,7 +1130,8 @@ def predict_fire_risk(
             try:
                 new_feature_cols = load_new_feature_columns()
                 shap_explanation = _compute_shap_explanation(
-                    features, lgbm_model,
+                    features,
+                    lgbm_model,
                     feature_vector=feature_vector_scaled,
                     feature_columns=new_feature_cols,
                 )
@@ -1127,7 +1174,7 @@ def predict_fire_risk(
         raise PredictionError(f"Failed to run prediction: {e}")
 
 
-def _calculate_risk_factors(features: Dict[str, Any]) -> Dict[str, float]:
+def _calculate_risk_factors(features: dict[str, Any]) -> dict[str, float]:
     """Calculate contributing risk factors."""
     factors = {}
 
@@ -1165,11 +1212,11 @@ def _calculate_risk_factors(features: Dict[str, Any]) -> Dict[str, float]:
 
 
 def _compute_shap_explanation(
-    features: Dict[str, Any],
+    features: dict[str, Any],
     lgbm_model: Any,
-    feature_vector: Optional[np.ndarray] = None,
-    feature_columns: Optional[list] = None,
-) -> Dict[str, Any]:
+    feature_vector: np.ndarray | None = None,
+    feature_columns: list | None = None,
+) -> dict[str, Any]:
     """
     Compute SHAP explanation for a single prediction.
 
@@ -1191,7 +1238,7 @@ def _compute_shap_explanation(
         else:
             df = pd.DataFrame([features])
             try:
-                with open(config.FEATURE_COLUMNS_PATH, "r") as f:
+                with open(config.FEATURE_COLUMNS_PATH) as f:
                     loaded_feature_columns = json.load(f)
             except Exception:
                 loaded_feature_columns = list(features.keys())
@@ -1212,14 +1259,21 @@ def _compute_shap_explanation(
             if len(shap_values) == 2:
                 shap_values_used = shap_values[1]
                 # expected_value may be scalar or array; get positive class
-                if hasattr(explainer.expected_value, '__len__') and len(explainer.expected_value) >= 2:
+                if (
+                    hasattr(explainer.expected_value, "__len__")
+                    and len(explainer.expected_value) >= 2
+                ):
                     base_value = float(explainer.expected_value[1])
                 else:
                     base_value = float(explainer.expected_value)
             else:
                 # Multi-class: default to class 1 (should not happen in current model)
                 shap_values_used = shap_values[1]
-                base_value = explainer.expected_value[1] if hasattr(explainer.expected_value, '__len__') else float(explainer.expected_value)
+                base_value = (
+                    explainer.expected_value[1]
+                    if hasattr(explainer.expected_value, "__len__")
+                    else float(explainer.expected_value)
+                )
         else:
             # Regression or single-output
             shap_values_used = shap_values
@@ -1250,7 +1304,7 @@ def _compute_shap_explanation(
 
 def _estimate_temporal_feature(
     col_name: str, current_val: float, month: int, doy: int
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Estimate lag3 (3 days ago) and roll7 (7-day average) values for a feature
     given its current value. Uses deterministic heuristics derived from typical
@@ -1259,6 +1313,7 @@ def _estimate_temporal_feature(
     This replaces the previous buggy implementation that used current values for
     both lag and roll, which caused constant predictions.
     """
+
     # Helper for bounded clamping
     def clamp(v, vmin=None, vmax=None, rounded=False):
         if rounded:
@@ -1273,6 +1328,7 @@ def _estimate_temporal_feature(
     # Phase offset per feature to avoid all features shifting together
     # Use deterministic hash instead of Python's salted hash for reproducibility
     import hashlib
+
     phase = int(hashlib.md5(col_name.encode()).hexdigest(), 16) % 365
     seasonal = 0.1 * math.sin(2 * math.pi * (doy + phase) / 365)
 
@@ -1337,9 +1393,7 @@ def _estimate_temporal_feature(
     return lag_val, roll_val
 
 
-def _create_feature_vector(
-    features: Dict[str, Any], use_new_features: bool = False
-) -> np.ndarray:
+def _create_feature_vector(features: dict[str, Any], use_new_features: bool = False) -> np.ndarray:
     """
     Create feature vector from input features.
 
@@ -1373,13 +1427,24 @@ def _create_feature_vector(
         land_cover = features["land_cover"]
     else:
         land_cover_map = {
-            "Hutan": 10, "Forest": 10, "Hutan Tropis Lembab": 10,
-            "Semak": 20, "Shrub": 20, "Semak Kering": 20,
-            "Savana": 30, "Savanna": 30,
-            "Rumput": 40, "Grass": 40, "Padang Rumput": 40, "Lahan Gambut": 40,
-            "Lahan Pertanian": 50, "Agriculture": 50,
-            "Lahan Terbuka": 60, "Open Land": 60,
-            "Pemukiman": 70, "Settlement": 70,
+            "Hutan": 10,
+            "Forest": 10,
+            "Hutan Tropis Lembab": 10,
+            "Semak": 20,
+            "Shrub": 20,
+            "Semak Kering": 20,
+            "Savana": 30,
+            "Savanna": 30,
+            "Rumput": 40,
+            "Grass": 40,
+            "Padang Rumput": 40,
+            "Lahan Gambut": 40,
+            "Lahan Pertanian": 50,
+            "Agriculture": 50,
+            "Lahan Terbuka": 60,
+            "Open Land": 60,
+            "Pemukiman": 70,
+            "Settlement": 70,
         }
         land_cover = land_cover_map.get(vegetation_type, 30)
 
@@ -1444,10 +1509,10 @@ def _create_feature_vector(
 
     # Threshold indicators - configurable via environment variables
     # Using more realistic percentile-based thresholds matching training distribution
-    temp_threshold = float(os.getenv('RISK_TEMP_THRESHOLD', '32'))
-    vpd_threshold = float(os.getenv('RISK_VPD_THRESHOLD', '12'))
-    wind_threshold = float(os.getenv('RISK_WIND_THRESHOLD', '4'))
-    
+    temp_threshold = float(os.getenv("RISK_TEMP_THRESHOLD", "32"))
+    vpd_threshold = float(os.getenv("RISK_VPD_THRESHOLD", "12"))
+    wind_threshold = float(os.getenv("RISK_WIND_THRESHOLD", "4"))
+
     hot_threshold = 1 if temp > temp_threshold else 0
     dry_threshold = 1 if vpd > vpd_threshold else 0
     windy_threshold = 1 if wind_speed > wind_threshold else 0
@@ -1538,11 +1603,15 @@ def _create_feature_vector(
         # Use new model feature columns if requested
         if use_new_features:
             feature_columns = load_new_feature_columns()
-            logger.info(f"Using new model features ({len(feature_columns)}): {feature_columns[:10]}...")
+            logger.info(
+                f"Using new model features ({len(feature_columns)}): {feature_columns[:10]}..."
+            )
         else:
-            with open(config.FEATURE_COLUMNS_PATH, "r") as f:
+            with open(config.FEATURE_COLUMNS_PATH) as f:
                 feature_columns = json.load(f)
-            logger.info(f"Using legacy features ({len(feature_columns)}): {feature_columns[:10]}...")
+            logger.info(
+                f"Using legacy features ({len(feature_columns)}): {feature_columns[:10]}..."
+            )
 
         # Create feature vector in correct order - must match exactly
         feature_vector = []
@@ -1553,10 +1622,10 @@ def _create_feature_vector(
             else:
                 missing_features.append(col)
                 feature_vector.append(0.0)
-        
+
         if missing_features:
             logger.warning(f"Missing features (using 0.0): {missing_features}")
-        
+
         # CRITICAL: Feature count must match exactly
         if len(feature_vector) != len(feature_columns):
             raise ValueError(
@@ -1588,9 +1657,7 @@ def _get_risk_level(probability: float) -> str:
         return "Extreme"
 
 
-def predict_from_csv(
-    csv_path: Union[str, Path], output_path: Optional[Union[str, Path]] = None
-) -> pd.DataFrame:
+def predict_from_csv(csv_path: str | Path, output_path: str | Path | None = None) -> pd.DataFrame:
     """
     Run predictions on a CSV file.
 
@@ -1608,7 +1675,7 @@ def predict_from_csv(
     df = engineer_features(df, lag=config.LAG, roll=config.ROLL_WINDOW)
 
     # Load feature columns
-    with open(config.FEATURE_COLUMNS_PATH, "r") as f:
+    with open(config.FEATURE_COLUMNS_PATH) as f:
         feature_names = json.load(f)
 
     available_cols = [col for col in feature_names if col in df.columns]
