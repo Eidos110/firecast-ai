@@ -102,19 +102,19 @@ def _generate_recommendations(risk_counts: Dict[str, int], total: int) -> List[s
     recs = []
     if high_pct >= 50:
         recs.append(
-            "Alert: **Immediate Action Required**: Deploy firefighting resources."
+            "**Immediate Action Required**: Deploy firefighting resources to high-risk zones."
         )
-        recs.append("People: **Evacuation**: Consider evacuating Extreme risk areas.")
-        recs.append("Radio: **Monitoring**: Activate 24/7 surveillance.")
+        recs.append("**Evacuation**: Consider evacuating Extreme-risk areas.")
+        recs.append("**Monitoring**: Activate 24/7 surveillance.")
     elif high_pct >= 25:
-        recs.append("Warning: **Elevated Alert**: Prepare firefighting teams.")
-        recs.append("Chart: **Increased Monitoring**: Aerial reconnaissance.")
+        recs.append("**Elevated Alert**: Prepare firefighting teams.")
+        recs.append("**Increased Monitoring**: Aerial reconnaissance of hotspots.")
     else:
-        recs.append("Check: **Normal Operations**: Standard monitoring.")
+        recs.append("**Normal Operations**: Standard monitoring continues.")
 
     if med_pct > 30:
         recs.append(
-            "Search: **Expand Coverage**: Broaden patrols to Medium-risk areas."
+            "**Expand Coverage**: Broaden patrols to Medium-risk areas."
         )
     return recs
 

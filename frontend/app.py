@@ -14,7 +14,9 @@ from typing import Dict, Any
 import sys
 import os
 import logging
-from shapely.geometry import Point, shape
+# NOTE (audit Fase 3b): shapely, generate_grid_points, analyze_aoi_results,
+# render_batch_results and _calculate_polygon_area_km2 moved to
+# frontend.utils.aoi_controller — they are only used by AOI batch paths.
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -34,10 +36,9 @@ try:
         render_interactive_map,
         handle_map_events,
         create_prediction_overlay,
-        generate_grid_points,
     )
     from frontend.components.weather_display import render_weather_info
-    from frontend.components.results_display import render_results, render_batch_results
+    from frontend.components.results_display import render_results
     from frontend.utils.weather_api import (
         get_weather_data,
         is_demo_mode,
@@ -71,7 +72,14 @@ try:
         get_risk_icon,
         get_risk_label,
     )
-    from frontend.utils.aoi_analysis import analyze_aoi_results
+    # Audit Fase 3b: AOI batch logic consolidated into one controller so main()
+    # only orchestrates tabs. (Formerly inline blocks in tab1.)
+    from frontend.utils.aoi_controller import (
+        handle_aoi_event,
+        render_aoi_summary_bar,
+        render_aoi_results,
+        render_aoi_weather_fallback,
+    )
 except ImportError as e:
     logger.error(f"Failed to import components: {e}")
     # Try relative imports as fallback
@@ -81,10 +89,9 @@ except ImportError as e:
             render_interactive_map,
             handle_map_events,
             create_prediction_overlay,
-            generate_grid_points,
         )
         from components.weather_display import render_weather_info
-        from components.results_display import render_results, render_batch_results
+        from components.results_display import render_results
         from utils.weather_api import get_weather_data, is_demo_mode, get_weather_status
         from utils.prediction_engine import (
             run_prediction,
@@ -113,7 +120,13 @@ except ImportError as e:
             get_risk_icon,
             get_risk_label,
         )
-        from utils.aoi_analysis import analyze_aoi_results
+        # Audit Fase 3b: AOI batch logic consolidated in one controller.
+        from utils.aoi_controller import (
+            handle_aoi_event,
+            render_aoi_summary_bar,
+            render_aoi_results,
+            render_aoi_weather_fallback,
+        )
     except ImportError as e2:
         logger.error(f"Fallback import also failed: {e2}")
         st.error(f"❌ Failed to load application components: {e}")
@@ -127,435 +140,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inject Google Fonts + Custom CSS — design tokens + component styles
-from frontend.utils.theme import get_global_font_import, get_css_variables
-_font_import = get_global_font_import()
-_css_vars = get_css_variables()
-st.markdown(_font_import, unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <style>
-    {_css_vars}
-
-    /* ── Global Typography ─────────────────────────────────────────────────── */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
-        font-family: var(--font-primary) !important;
-    }}
-    
-    /* Typography scale for all Streamlit elements */
-    .stMarkdown p, .stText {{
-        font-size: var(--font-size-base) !important;
-        line-height: var(--line-height-normal) !important;
-        font-weight: var(--font-weight-normal) !important;
-    }}
-    
-    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {{
-        font-family: var(--font-primary) !important;
-        font-weight: var(--font-weight-semibold) !important;
-        line-height: var(--line-height-tight) !important;
-        margin-top: var(--spacing-lg) !important;
-        margin-bottom: var(--spacing-sm) !important;
-    }}
-    
-    .stMarkdown h1 {{ font-size: var(--font-size-3xl) !important; }}
-    .stMarkdown h2 {{ font-size: var(--font-size-2xl) !important; }}
-    .stMarkdown h3 {{ font-size: var(--font-size-xl) !important; }}
-    .stMarkdown h4 {{ font-size: var(--font-size-lg) !important; }}
-    
-    /* Caption and small text */
-    .stMarkdown .stCaption, .stCaption, small, .sim-badge {{
-        font-size: var(--font-size-sm) !important;
-        line-height: var(--line-height-normal) !important;
-    }}
-    
-    /* Tab labels */
-    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {{
-        font-size: var(--font-size-base) !important;
-        font-weight: var(--font-weight-medium) !important;
-    }}
-    
-    /* Button text */
-    .stButton button, button[kind="secondary"], button[kind="primary"] {{
-        font-family: var(--font-primary) !important;
-        font-weight: var(--font-weight-medium) !important;
-        font-size: var(--font-size-sm) !important;
-    }}
-    
-    /* Selectbox, slider, other inputs labels */
-    .stSlider label, .stSelectbox label, .stNumberInput label, .stCheckbox label {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-medium) !important;
-        color: var(--color-text-primary) !important;
-    }}
-    
-    /* Metric labels */
-    [data-testid="stMetricLabel"], .stMetricLabel {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-medium) !important;
-        color: var(--color-text-secondary) !important;
-    }}
-    
-    /* Metric value */
-    [data-testid="stMetricValue"], .stMetricValue {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-xl) !important;
-        font-weight: var(--font-weight-bold) !important;
-    }}
-    
-    .main {{ padding: 0; }}
-    
-    /* ── Demo banner ────────────────────────────────────────────── */
-    .demo-badge, .demo-banner {{
-        background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
-        color: white;
-        padding: 12px 16px;
-        border-radius: var(--radius-md);
-        text-align: center;
-        margin-bottom: var(--spacing-md);
-        font-weight: var(--font-weight-semibold);
-        font-size: var(--font-size-sm);
-        animation: fadeIn 0.4s ease;
-    }}
-
-    /* ── API status badges ──────────────────────────────────────── */
-    .api-status {{
-        font-size: 0.78rem;
-        padding: 4px 10px;
-        border-radius: var(--radius-full);
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        font-weight: 500;
-    }}
-    .api-connected {{
-        background: rgba(34, 197, 94, 0.15);
-        color: #4ade80;
-    }}
-    .api-demo {{
-        background: rgba(251, 146, 60, 0.15);
-        color: #fbbf24;
-    }}
-
-    /* ── Risk level blocks ──────────────────────────────────────── */
-    .risk-rendah {{
-        background: var(--risk-bg-rendah);
-        border-left: 4px solid var(--risk-rendah);
-        padding: var(--spacing-md);
-        border-radius: var(--radius-sm);
-    }}
-    .risk-sedang {{
-        background: var(--risk-bg-sedang);
-        border-left: 4px solid var(--risk-sedang);
-        padding: var(--spacing-md);
-        border-radius: var(--radius-sm);
-    }}
-    .risk-tinggi {{
-        background: var(--risk-bg-tinggi);
-        border-left: 4px solid var(--risk-tinggi);
-        padding: var(--spacing-md);
-        border-radius: var(--radius-sm);
-    }}
-    .risk-sangat-tinggi {{
-        background: var(--risk-bg-sangat-tinggi);
-        border-left: 4px solid var(--risk-sangat-tinggi);
-        padding: var(--spacing-md);
-        border-radius: var(--radius-sm);
-    }}
-
-    /* ── Card component ─────────────────────────────────────────── */
-    .fc-card {{
-        background: var(--color-surface);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-lg);
-        padding: var(--spacing-lg);
-        box-shadow: var(--shadow-card);
-        transition: box-shadow 0.2s ease, transform 0.2s ease;
-    }}
-    .fc-card:hover {{
-        box-shadow: var(--shadow-card-hover);
-        transform: translateY(-1px);
-    }}
-
-    /* ── Risk score hero card ───────────────────────────────────── */
-    .risk-hero {{
-        padding: var(--spacing-lg);
-        border-radius: var(--radius-lg);
-        text-align: center;
-        color: white;
-        box-shadow: var(--shadow-md);
-        animation: fadeIn 0.5s ease;
-    }}
-    .risk-hero h2 {{
-        margin: 0 0 var(--spacing-sm) 0;
-        font-size: 1.4rem;
-    }}
-    .risk-hero .score {{
-        font-size: 2.8rem;
-        font-weight: 700;
-        margin: 0;
-        line-height: 1.1;
-    }}
-    .risk-hero .subtitle {{
-        margin-top: var(--spacing-sm);
-        opacity: 0.85;
-        font-size: 0.9rem;
-    }}
-
-    /* Sim-badge (What-If indicator) */
-    .sim-badge {{
-        display: inline-block;
-        background: rgba(251, 146, 60, 0.15);
-        color: #fbbf24;
-        font-size: var(--font-size-xs) !important;
-        padding: 2px 8px;
-        border-radius: var(--radius-full);
-        font-weight: var(--font-weight-bold) !important;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        vertical-align: middle;
-        margin-bottom: var(--spacing-xs);
-    }}
-    
-    /* Preset button grid spacing */
-    [data-testid="stHorizontalBlock"] > div {{
-        padding: 0 var(--spacing-xs) !important;
-        margin-bottom: var(--spacing-sm) !important;
-    }}
-    [data-testid="stHorizontalBlock"] > div:first-child {{
-        padding-left: 0 !important;
-    }}
-    [data-testid="stHorizontalBlock"] > div:last-child {{
-        padding-right: 0 !important;
-    }}
-    
-    /* Column dividers inside expanders */
-    .stExpander [data-testid="stHorizontalBlock"] {{
-        margin: var(--spacing-sm) - var(--spacing-md) !important;
-    }}
-    
-    /* Spacer help text under inputs */
-    .stSlider [data-baseweb="slider"] > div:nth-child(2) {{
-        margin-top: var(--spacing-xs) !important;
-        font-size: var(--font-size-xs) !important;
-        color: var(--color-text-muted) !important;
-    }}
-
-    /* ── Map container ──────────────────────────────────────────── */
-    .stfolium-container {{
-        width: 100% !important;
-        height: 500px !important;
-        pointer-events: auto !important;
-    }}
-    .folium-map {{
-        height: 500px !important;
-        width: 100% !important;
-        pointer-events: auto !important;
-    }}
-    iframe {{
-        border: none !important;
-        width: 100% !important;
-        height: 500px !important;
-        pointer-events: auto !important;
-    }}
-    
-    /* ── Ensure map interactions work ───────────────────────────── */
-    div[data-testid="stVerticalBlockBorderWrapper"] {{
-        pointer-events: auto !important;
-    }}
-    
-    /* ── Sidebar Styling ─────────────────────────────────────────────── */
-    section[data-testid="stSidebar"] {{
-        background-color: var(--color-surface) !important;
-        border-right: 1px solid var(--color-border) !important;
-        padding: var(--spacing-sm) var(--spacing-md) !important;
-        font-family: var(--font-primary) !important;
-    }}
-    
-    /* Sidebar section headers (expander headers) */
-    .stExpander > summary {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-base) !important;
-        font-weight: var(--font-weight-semibold) !important;
-        color: var(--color-text-primary) !important;
-        padding: var(--spacing-sm) var(--spacing-md) !important;
-        border-radius: var(--radius-md) !important;
-        transition: background 0.15s ease !important;
-        margin-top: var(--spacing-xs) !important;
-        letter-spacing: -0.01em !important;
-    }}
-    
-    .stExpander > summary:hover {{
-        background: rgba(0, 0, 0, 0.03) !important;
-    }}
-    
-    /* Captions and small text */
-    .stCaption, .streamlit-expander-header p {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-normal) !important;
-        color: var(--color-text-secondary) !important;
-        line-height: var(--line-height-normal) !important;
-    }}
-    
-    /* Expander content padding */
-    .stExpander [data-testid="stExpanderDetails"] {{
-        padding: var(--spacing-md) !important;
-        border: none !important;
-        background: transparent !important;
-    }}
-    
-    /* Buttons */
-    .stButton button {{
-        font-family: var(--font-primary) !important;
-        font-weight: var(--font-weight-medium) !important;
-        font-size: var(--font-size-sm) !important;
-        border-radius: var(--radius-md) !important;
-        transition: all 0.15s ease !important;
-        border: 1px solid var(--color-border) !important;
-        padding: var(--spacing-xs) var(--spacing-sm) !important;
-    }}
-    
-    .stButton button:hover {{
-        transform: translateY(-1px) !important;
-        box-shadow: var(--shadow-sm) !important;
-        border-color: var(--color-accent) !important;
-    }}
-    
-    /* Alert/status messages */
-    .stAlert {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        padding: var(--spacing-sm) var(--spacing-md) !important;
-        border-radius: var(--radius-md) !important;
-        border: none !important;
-    }}
-    
-    [data-baseweb="notification-success"] {{
-        background: rgba(34, 197, 94, 0.08) !important;
-        border-left: 3px solid var(--color-success) !important;
-    }}
-    
-    [data-baseweb="notification-info"] {{
-        background: rgba(59, 130, 246, 0.08) !important;
-        border-left: 3px solid var(--color-info) !important;
-    }}
-    
-    [data-baseweb="notification-warning"] {{
-        background: rgba(245, 158, 11, 0.08) !important;
-        border-left: 3px solid var(--color-warning) !important;
-    }}
-    
-    [data-baseweb="notification-error"] {{
-        background: rgba(239, 68, 68, 0.08) !important;
-        border-left: 3px solid var(--color-error) !important;
-    }}
-    
-    /* Selectbox */
-    .stSelectbox [data-baseweb="select"] {{
-        font-family: var(--font-primary) !important;
-    }}
-    .stSelectbox [data-baseweb="select"] > div {{
-        border-radius: var(--radius-md) !important;
-        border: 1px solid var(--color-border) !important;
-        font-size: var(--font-size-sm) !important;
-    }}
-    .stSelectbox [data-baseweb="value-container"] {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-    }}
-    
-    /* Slider */
-    .stSlider [data-baseweb="slider"] {{
-        margin: var(--spacing-md) 0 !important;
-    }}
-    .stSlider [data-baseweb="slider"] > div > div > div {{
-        background: var(--color-accent) !important;
-    }}
-    .stSlider label {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-medium) !important;
-        color: var(--color-text-primary) !important;
-        margin-bottom: var(--spacing-xs) !important;
-    }}
-    
-    /* Number input */
-    .stNumberInput [data-baseweb="input"] {{
-        border-radius: var(--radius-md) !important;
-        border: 1px solid var(--color-border) !important;
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-    }}
-    
-    /* Metric widget */
-    .stMetricLabel, [data-testid="stMetricLabel"] {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-medium) !important;
-        color: var(--color-text-secondary) !important;
-        letter-spacing: 0.01em !important;
-    }}
-    .stMetricValue, [data-testid="stMetricValue"] {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-xl) !important;
-        font-weight: var(--font-weight-bold) !important;
-        color: var(--color-text-primary) !important;
-    }}
-    
-    /* Divider */
-    hr, [data-testid="stMarkdownContainer"] hr {{
-        margin: var(--spacing-lg) 0 !important;
-        border: none !important;
-        border-top: 1px solid var(--color-border) !important;
-    }}
-    
-     /* Sidebar section title (h3 used in sidebar) */
-     h3, .stMarkdown h3 {{
-         font-family: var(--font-primary) !important;
-         font-size: var(--font-size-base) !important;
-         font-weight: var(--font-weight-semibold) !important;
-         color: var(--color-text-primary) !important;
-         margin: var(--spacing-md) 0 var(--spacing-sm) 0 !important;
-         letter-spacing: -0.01em !important;
-         line-height: var(--line-height-tight) !important;
-     }}
-    
-    /* Checkbox */
-    .stCheckbox label {{
-        font-family: var(--font-primary) !important;
-        font-size: var(--font-size-sm) !important;
-        font-weight: var(--font-weight-medium) !important;
-    }}
-
-    /* ── Responsive adjustments ─────────────────────────────────── */
-    @media (max-width: 768px) {{
-        .risk-hero .score {{ font-size: 2rem; }}
-        .fc-card {{ padding: var(--spacing-md); }}
-        iframe, .folium-map, .stfolium-container {{ height: 350px !important; }}
-    }}
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-
-def _calculate_polygon_area_km2(coords: list) -> float:
-    """Calculate approximate area of a polygon (lat/lon list) in km² using shoelace formula."""
-    if len(coords) < 3:
-        return 0.0
-    # Convert to radians: coords are [lon, lat] from shapely
-    coords_rad = [(math.radians(lat), math.radians(lon)) for lon, lat in coords]
-    area = 0.0
-    n = len(coords_rad)
-    for i in range(n):
-        j = (i + 1) % n
-        lat1, lon1 = coords_rad[i]
-        lat2, lon2 = coords_rad[j]
-        area += (lon2 - lon1) * (2 + math.sin(lat1) + math.sin(lat2))
-    area = abs(area) * 6371.0**2 / 2.0
-    return area
-
+# Inject Google Fonts + Custom CSS — design tokens + component styles (Fase 4).
+# CSS now lives in frontend/styles/app.css and is injected exactly once per session.
+from frontend.styles import inject_design_tokens, render_theme_toggle
+inject_design_tokens()
+render_theme_toggle()
 
 def initialize_session_state():
     """Initialize all session state variables."""
@@ -574,7 +163,6 @@ def initialize_session_state():
         "demo_mode_shown": False,
         "language": "id",
         "last_processed_location": None,
-        "last_processed_aoi": None,
         "last_processed_event_id": None,
     }
 
@@ -863,185 +451,30 @@ def main():
                 if event_id and event_id != last_processed:
                     st.session_state.last_processed_event_id = event_id
                     # Coordinates already set by handle_click_event
-                    risk = event.get("risk", 0)
-                    level = event.get("risk_level", "Unknown")
+                    risk = event.get("risk") or 0
+                    level = event.get("risk_level") or "Unknown"
                     st.info(
                         f"📍 Point selected — Risk: {risk * 100:.1f}% ({level}). "
                         "Use 'Run Prediction' to recalculate with current settings."
                     )
                     st.rerun()
-            elif event and event.get("type") in ["aoi", "aoi_updated"]:
-                # Prevent duplicate batch runs (same event_id)
-                last_processed = st.session_state.get("last_processed_event_id")
-                if event_id and event_id == last_processed:
-                    pass
-                else:
-                    st.session_state.last_processed_event_id = event_id
-                    aoi_geojson = st.session_state.get("aoi_geojson")
-                    if aoi_geojson:
-                        grid_coords = generate_grid_points(grid_size=10)
-                        if grid_coords:
-                            # Extract geometry
-                            geom = (
-                                aoi_geojson.get("geometry")
-                                if isinstance(aoi_geojson, dict) and "geometry" in aoi_geojson
-                                else aoi_geojson
-                            )
-                            polygon = shape(geom)
-
-                            # Find points inside polygon
-                            inside_points = []
-                            for pt in grid_coords:
-                                lat, lon = pt
-                                if polygon.contains(Point(lon, lat)):
-                                    inside_points.append([lat, lon])
-
-                            # Fallback: if none inside, use grid centroid
-                            if not inside_points:
-                                lats = [c[0] for c in grid_coords]
-                                lons = [c[1] for c in grid_coords]
-                                inside_points = [
-                                    [sum(lats) / len(lats), sum(lons) / len(lons)]
-                                ]
-
-                            # Build input DataFrame for batch prediction
-                            rows = []
-                            for lat, lon in inside_points:
-                                rows.append(
-                                    {
-                                        "latitude": lat,
-                                        "longitude": lon,
-                                        "temperature": input_data.get("temperature", 30),
-                                        "humidity": input_data.get("humidity", 50),
-                                        "wind_speed": input_data.get("wind_speed", 5),
-                                        "wind_direction": input_data.get("wind_direction", 0),
-                                        "rainfall": input_data.get("rainfall", 0),
-                                        "vegetation_type": input_data.get("vegetation_type", "Savana"),
-                                        "fuel_moisture": input_data.get("fuel_moisture", 35),
-                                        "ndvi": input_data.get("ndvi", 0.5),
-                                    }
-                                )
-                            batch_df = pd.DataFrame(rows)
-
-                            # Run batch prediction with error handling
-                            try:
-                                with st.spinner("🧠 Running AOI batch prediction..."):
-                                    result_df = run_batch_prediction(
-                                        batch_df,
-                                        risk_tolerance=st.session_state.get("setting_risk_tolerance", 50),
-                                        model_type=st.session_state.get("active_model_type", "new"),
-                                        progress_callback=None,
-                                    )
-                                batch_list = result_df.to_dict(orient="records")
-
-                                # Compute AOI metadata
-                                aoi_area_km2 = _calculate_polygon_area_km2(list(polygon.exterior.coords))
-                                centroid = polygon.centroid
-                                aoi_center = [centroid.y, centroid.x]  # lat, lon
-
-                                # Store full AOI metadata + batch results
-                                st.session_state.prediction_result = {
-                                    "batch_results": batch_list,
-                                    "grid_count": len(batch_list),
-                                    "aoi_area_km2": aoi_area_km2,
-                                    "aoi_center": aoi_center,
-                                    "parameters": {
-                                        "grid_size": 10,
-                                        "weather_params": {
-                                            "temperature": input_data.get("temperature", 30),
-                                            "humidity": input_data.get("humidity", 50),
-                                            "wind_speed": input_data.get("wind_speed", 5),
-                                            "wind_direction": input_data.get("wind_direction", 0),
-                                            "rainfall": input_data.get("rainfall", 0),
-                                            "vegetation_type": input_data.get("vegetation_type", "Savana"),
-                                            "fuel_moisture": input_data.get("fuel_moisture", 35),
-                                            "ndvi": input_data.get("ndvi", 0.5),
-                                        },
-                                        "risk_tolerance": st.session_state.get("setting_risk_tolerance", 50),
-                                        "model_type": st.session_state.get("active_model_type", "new"),
-                                    },
-                                }
-
-                                # Check for failed predictions
-                                failed_count = sum(1 for r in batch_list if r.get("overall_risk") is None)
-                                if failed_count > 0:
-                                    st.warning(
-                                        f"⚠️ {failed_count} of {len(batch_list)} points failed to generate predictions. "
-                                        "Check logs for details."
-                                    )
-
-                                # Run advanced analysis on batch results
-                                try:
-                                    analysis = analyze_aoi_results(batch_list)
-                                    st.session_state.aoi_analysis = analysis
-                                except Exception as e:
-                                    logger.warning(f"AOI analysis failed: {e}")
-                                    st.session_state.aoi_analysis = None
-
-                                st.success(
-                                    f"📐 AOI Batch: {len(batch_list)} points predicted"
-                                )
-                                st.rerun()
-
-                            except Exception as pred_err:
-                                st.error(f"❌ AOI prediction failed: {pred_err}")
-                                logger.exception("AOI batch prediction error")
-                    else:
-                        st.warning("No AOI geometry available")
-
-            elif event and event.get("type") == "aoi_deleted":
-                # Clear analysis when AOI is deleted
-                st.session_state.aoi_analysis = None
+            elif event and event.get("type") in ["aoi", "aoi_updated", "aoi_deleted"]:
+                # Audit Fase 3b: AOI batch logic extracted to aoi_controller
+                # so main() only orchestrates tabs. The controller inspects
+                # event type, deduplicates by event_id, runs the polygon grid,
+                # batch prediction, AOI analysis and session-state wiring.
+                # Returns True only when a real prediction was run so we rerun.
+                if handle_aoi_event(event, event_id, input_data):
+                    st.rerun()
 
         # ── Floating risk summary (above the fold) ─────────────────
         if st.session_state.prediction_result:
             _result = st.session_state.prediction_result
 
-            # Check if this is batch results
+            # Audit Fase 3b: AOI batch summary bar delegated to the controller.
+            # It is a no-op for non-batch results (single-point branch below).
             if "batch_results" in _result:
-                _batch = _result.get("batch_results", [])
-                _grid_count = _result.get("grid_count", 0)
-                if _batch:
-                    # Use analysis summary if available, otherwise compute from batch
-                    _aoi_analysis = st.session_state.get("aoi_analysis")
-                    if _aoi_analysis and _aoi_analysis.get("summary"):
-                        summ = _aoi_analysis["summary"]
-                        _avg_risk_pct = summ.get("avg_risk_pct", 0.0)
-                        _max_risk_pct = summ.get("max_risk_pct", 0.0)
-                        # Compute high+extreme count from summary's total_points and percentage
-                        _total_points = summ.get("total_points", len(_batch))
-                        _high_pct = summ.get("high_extreme_pct", 0.0)
-                        _high_count = round(_total_points * _high_pct / 100) if _total_points > 0 else 0
-                    else:
-                        # Fallback: calculate from raw batch_results
-                        _risk_values = []
-                        for r in _batch:
-                            val = r.get("overall_risk", 0)
-                            try:
-                                _risk_values.append(float(val))
-                            except (TypeError, ValueError):
-                                _risk_values.append(0.0)
-                        _avg_risk = sum(_risk_values) / len(_risk_values) if _risk_values else 0.0
-                        _avg_risk_pct = _avg_risk * 100
-                        _max_risk_pct = max(_risk_values) * 100 if _risk_values else 0.0
-                        _high_count = sum(
-                            1 for r in _batch if r.get("risk_level") in ["High", "Extreme"]
-                        )
-                    st.markdown(
-                        f"""
-                    <div class="risk-summary-bar">
-                        <span style="font-size:1.4rem;">📊</span>
-                        <div>
-                            <span style="color:#f59e0b;font-weight:700;font-size:1.1rem;">Batch Results</span>
-                            <span style="color:var(--color-text-muted);margin-left:8px;">{_grid_count} points</span>
-                        </div>
-                        <span style="color:var(--color-text-muted);font-size:0.85rem;margin-left:auto;">
-                            Avg: {_avg_risk_pct:.1f}% | High/Extreme: {_high_count}
-                        </span>
-                    </div>
-                    """,
-                        unsafe_allow_html=True,
-                    )
+                render_aoi_summary_bar(_result)
             else:
                 # Single prediction result
                 _risk = _result.get("overall_risk", 0)
@@ -1074,18 +507,10 @@ def main():
 
             _result = st.session_state.prediction_result
 
-            # Check if this is batch results
+            # Check if this is batch results. Audit Fase 3b: AOI results
+            # rendering delegated to the controller (no-op for non-batch).
             if "batch_results" in _result:
-                # Display batch results with rich visualizations
-                try:
-                    _batch = _result.get("batch_results", [])
-                    _grid_count = _result.get("grid_count", 0)
-                    if _batch:
-                        # Get AOI analysis if available
-                        _aoi_analysis = st.session_state.get("aoi_analysis")
-                        render_batch_results(_batch, _aoi_analysis)
-                except Exception as e:
-                    st.error(f"Error displaying batch results: {e}")
+                render_aoi_results(_result)
             else:
                 # Single prediction result
                 try:
@@ -1153,21 +578,9 @@ def main():
         ):
             st.markdown("---")
             st.markdown(f"### 🌤️ {t('weather_info')}")
-            try:
-                _batch = st.session_state.prediction_result.get("batch_results", [])
-                if _batch and len(_batch) > 0:
-                    _first_point = _batch[0]
-                    _weather_summary = {
-                        "temperature": _first_point.get("temperature", 30),
-                        "humidity": _first_point.get("humidity", 50),
-                        "wind_speed": _first_point.get("wind_speed", 5),
-                        "wind_direction": _first_point.get("wind_direction", 0),
-                        "rainfall": _first_point.get("rainfall", 0),
-                        "source": "AOI Input Parameters",
-                    }
-                    render_weather_info(_weather_summary)
-            except Exception as e:
-                st.error(f"Error displaying weather: {e}")
+            # Audit Fase 3b: synthetic AOI weather fallback delegated to the
+            # controller (no-op when there are no batch_results).
+            render_aoi_weather_fallback(st.session_state.prediction_result)
 
     # Tab 2: Historical Analysis
     with tab2:

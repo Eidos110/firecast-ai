@@ -674,7 +674,7 @@ def render_results(prediction_result: Dict[str, Any]) -> None:
         )
 
     with col_risk2:
-        affected_area = prediction_result.get("affected_area", 0)
+        affected_area = prediction_result.get("affected_area") or 0
         st.metric(
             " Area Berpotensi Terdampak",
             f"{affected_area:.0f} Ha",
@@ -682,7 +682,7 @@ def render_results(prediction_result: Dict[str, Any]) -> None:
         )
 
     with col_risk3:
-        max_spread_distance = prediction_result.get("max_spread_distance", 0)
+        max_spread_distance = prediction_result.get("max_spread_distance") or 0
         st.metric(
             " Jangkauan Maksimal",
             f"{max_spread_distance:.1f} km",
@@ -861,7 +861,12 @@ def render_results(prediction_result: Dict[str, Any]) -> None:
     st.markdown("##### ℹ️ Informasi Model")
     col_confidence1, col_confidence2 = st.columns(2)
     with col_confidence1:
-        model_confidence = prediction_result.get("model_confidence", 0.85)
+        # Audit Fase 2c: key was "model_confidence" but prediction_engine
+        # stores the value under "confidence" (line ~487 of prediction_engine).
+        # The previous fallback to a hardcoded 0.85 meant the UIAlways
+        # displayed "85.0%", masking real confidence (sometimes very low).
+        model_confidence = prediction_result.get("confidence",
+                                                  prediction_result.get("model_confidence", 0.0))
         st.metric(
             "Kepercayaan Model", f"{model_confidence * 100:.1f}%", "Akurasi prediksi"
         )
@@ -1199,7 +1204,15 @@ def _render_temporal_forecast_section(temporal_forecast: dict, current_risk: flo
 
 
 def _get_temporal_action_recommendation(risk_score: float) -> str:
-    """Get concise action recommendation for a given temporal risk score."""
+    """Get concise action recommendation for a given temporal risk score.
+
+    NOTE: Action-severity thresholds (0.3 / 0.6 / 0.8) are NOT the same as the
+    risk-tier thresholds in theme.RISK_THRESHOLDS (0.3 / 0.5 / 0.7). The action
+    tiers (Monitoring/Waspada/Siaga/Darurat) describe operational response, while
+    the risk tier (Rendah/Sedang/Tinggi/Sangat Tinggi) shown in the "Level"
+    column of the detail table still uses theme.get_risk_level @ 0.3/0.5/0.7.
+    A score of 0.55 therefore maps to action "Waspada" but risk tier "Tinggi".
+    """
     if risk_score < 0.3:
         return "🔵 Monitoring rutin"
     elif risk_score < 0.6:
