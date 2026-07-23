@@ -10,7 +10,11 @@
 # Core Data Science
 # Pinned to match training runtime env (FIREvCPU: py3.12 CPU) to avoid
 # pickle InconsistentVersion warnings from sklearn/xgboost/lightgbm.
-numpy>=2.0.0
+# NOTE: numpy<2 is a workaround for shap's _colorconv.py np.inexact bug
+#       (shap 0.46 shipped a stale vendored skimage color converter that
+#        calls np.dtype(np.floating) which numpy>=2 rejects). Revisit once
+#        a fixed shap wheel (>=0.47) is released.
+numpy>=1.26,<2
 pandas>=2.0.3
 scikit-learn>=1.9.0
 
@@ -92,7 +96,6 @@ passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
 apscheduler>=3.10.4
 slowapi>=0.1.9
-mkdocs>=1.5.0
 
 # =============================================================================
 # Development (excluded from deployment)

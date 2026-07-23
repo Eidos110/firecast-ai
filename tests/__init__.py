@@ -3,8 +3,8 @@ FireCast Test Package
 Tests for the Fire Forecasting System
 """
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
 
 # Add parent directory to path

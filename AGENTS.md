@@ -11,6 +11,8 @@
   ```powershell
   $env:PYTHONPATH = (Get-Location).Path
   ```
+- hindari 40 rpm(request per minute) pada penggunaan agent karena kita menggunakan API NVIDIA(Free tier). pada free time, kita mendapatkan 40 rpm. jika kita menggunakan lebih dari 40 rpm, kita akan mendapatkan error `429`. 
+
 - Hindari burst request > 40 RPM (batas free-tier OpenWeatherMap). Internal limiter sudah 30/min per-IP + global token-bucket 30/min (`_owm_rate_ok` di `src/geo_api.py`).
 
 ### Perintah yang sering dipakai
@@ -93,6 +95,7 @@ tests/                 → test_config / test_prediction / test_integration
 | 5 | Variabel CSS hilang `--color-warning`/`--color-error`/`--color-text-primary`/`--color-text-secondary` digunakan di `app.py` tapi tidak ada di `theme.py:PALETTE` → border notif & teks label tak ter-style | `frontend/utils/theme.py` | FIXED |
 | 6 | Class CSS `.risk-summary-bar` dipakai di `app.py:1235,1259` tapi tidak didefinisikan → floating risk summary jatuh berantakan | `frontend/app.py` | FIXED |
 | 7 | Legend risiko di `results_display.py` pakai rentang `0-30/30-60/60-80/>80` yang TIDAK konsisten dengan `theme.get_risk_level` (`<30/30-50/50-70/>70`) — menyesatkan pengguna | `frontend/components/results_display.py` & `frontend/utils/theme.py` (baru: `get_risk_range`, `RISK_THRESHOLDS`) | FIXED |
+| 8 | `frontend/utils/prediction_engine.py` bootstrap me-replace `sys.modules["src"]`, `sys.modules["src.predict"]`, `sys.modules["src.database"]` dengan instance baru via `importlib.util.spec_from_file_location`. Saat dipanggil SETELAH test/import lain yang sudah set global `predict_xgb` lewat `predict._init_models` / `predict.load_stacking_models`, instance stale menyebabkan `NameError: name 'predict_xgb' is not defined` intermiten (muncul hanya saat pytest collection memuat modul theme sebelum predict). | `frontend/utils/prediction_engine.py` (re-use instance bila sudah ada di `sys.modules`) | FIXED |
 
 ## 5. Rekomendasi Optimasi Berikutnya
 

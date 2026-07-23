@@ -141,6 +141,7 @@ add_new_model/firecast-001-db06a187f9f4.json
 .kilo/
 firecast-private/
 tmp-space-deploy/
+docker_stash/
 
 # Keep these files
 !models/cnn_best.pth
