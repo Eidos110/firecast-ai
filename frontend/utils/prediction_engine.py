@@ -21,6 +21,30 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
+# Single-source risk colors from theme.RISK_COLORS (English-keyed view used by
+# prediction_engine which emits English risk levels Low/Medium/High/Extreme).
+try:
+    from frontend.utils.theme import RISK_COLORS as _THEME_RISK_COLORS
+except ImportError:
+    try:
+        from utils.theme import RISK_COLORS as _THEME_RISK_COLORS
+    except ImportError:
+        _THEME_RISK_COLORS = {
+            "rendah": "#22c55e",
+            "sedang": "#f59e0b",
+            "tinggi": "#ef4444",
+            "sangat_tinggi": "#7f1d1d",
+        }
+
+# English-keyed alias backed by the same source so callers that already use
+# English risk levels (Low/Medium/High/Extreme) stay consistent.
+EN_RISK_COLORS = {
+    "Low": _THEME_RISK_COLORS["rendah"],
+    "Medium": _THEME_RISK_COLORS["sedang"],
+    "High": _THEME_RISK_COLORS["tinggi"],
+    "Extreme": _THEME_RISK_COLORS["sangat_tinggi"],
+}
+
 # Add parent directories to path for imports
 project_root = Path(__file__).parent.parent.parent
 src_path = project_root / "src"
@@ -51,52 +75,66 @@ def _bs_log(msg: str) -> None:
 
 # Try to import from src using importlib
 try:
-    # Build a stub 'src' package with right __path__ so that any
-    # submodule import (e.g. "from src.models.registry import …") can be
-    # found on disk without running src/__init__.py.
+    # IMPORTANT: never overwrite an already-imported ``src`` / ``src.predict`` /
+    # ``src.database`` module. The Streamlit shell and the test suite import the
+    # canonical module once; replacing it here with a freshly built stale
+    # instance (via ``importlib.util.spec_from_file_location``) silently drops
+    # module globals that were lazily registered later (e.g. ``predict_xgb``
+    # set by ``predict.load_stacking_models`` / ``predict._init_models``). The
+    # result is an intermittent ``NameError: name 'predict_xgb' is not defined``
+    # whenever this file is imported after ``src.predict`` has been exercised
+    # (see audit / AGENTS.md). Reuse the live instance when present.
     import types as _types
-    src_stub = _types.ModuleType("src")
-    src_stub.__path__ = [str(src_path)]
-    src_stub.__package__ = "src"
-    sys.modules["src"] = src_stub
 
-    # Patch a no-op loader so that exec_module() does NOT execute the
-    # real src/__init__.py (which has heavy imports).
-    class _NullLoader:
-        def create_module(self, spec):
-            return src_stub
-        def exec_module(self, mod):
-            pass
+    if "src" not in sys.modules:
+        src_stub = _types.ModuleType("src")
+        src_stub.__path__ = [str(src_path)]
+        src_stub.__package__ = "src"
+        sys.modules["src"] = src_stub
 
-    src_spec = importlib.util.spec_from_file_location(
-        "src", project_root / "src" / "__init__.py",
-        submodule_search_locations=[str(src_path)],
-    )
-    src_spec.loader = _NullLoader()
-    src_mod = importlib.util.module_from_spec(src_spec)
-    src_mod.__path__ = [str(src_path)]
-    src_mod.__package__ = "src"
-    sys.modules["src"] = src_mod
+        # No-op loader so exec_module() does NOT execute the real src/__init__.py
+        # (which has heavy imports).
+        class _NullLoader:
+            def create_module(self, spec):
+                return src_stub
+            def exec_module(self, mod):
+                pass
 
-    # Import predict module
-    predict_spec = importlib.util.spec_from_file_location(
-        "src.predict", src_path / "predict.py"
-    )
-    predict_module = importlib.util.module_from_spec(predict_spec)
-    sys.modules["src.predict"] = predict_module
-    predict_spec.loader.exec_module(predict_module)
+        src_spec = importlib.util.spec_from_file_location(
+            "src", project_root / "src" / "__init__.py",
+            submodule_search_locations=[str(src_path)],
+        )
+        src_spec.loader = _NullLoader()
+        src_mod = importlib.util.module_from_spec(src_spec)
+        src_mod.__path__ = [str(src_path)]
+        src_mod.__package__ = "src"
+        sys.modules["src"] = src_mod
+
+    # Import predict module — reuse live instance if already present.
+    if "src.predict" in sys.modules:
+        predict_module = sys.modules["src.predict"]
+    else:
+        predict_spec = importlib.util.spec_from_file_location(
+            "src.predict", src_path / "predict.py"
+        )
+        predict_module = importlib.util.module_from_spec(predict_spec)
+        sys.modules["src.predict"] = predict_module
+        predict_spec.loader.exec_module(predict_module)
 
     predict_fire_risk = predict_module.predict_fire_risk
     PredictionError = predict_module.PredictionError
     ModelLoadError = predict_module.ModelLoadError
 
-    # Import database module
-    database_spec = importlib.util.spec_from_file_location(
-        "src.database", src_path / "database.py"
-    )
-    database_module = importlib.util.module_from_spec(database_spec)
-    sys.modules["src.database"] = database_module
-    database_spec.loader.exec_module(database_module)
+    # Import database module — reuse live instance if already present.
+    if "src.database" in sys.modules:
+        database_module = sys.modules["src.database"]
+    else:
+        database_spec = importlib.util.spec_from_file_location(
+            "src.database", src_path / "database.py"
+        )
+        database_module = importlib.util.module_from_spec(database_spec)
+        sys.modules["src.database"] = database_module
+        database_spec.loader.exec_module(database_module)
 
     log_prediction = database_module.log_prediction
     get_predictions = database_module.get_predictions
@@ -167,13 +205,7 @@ def _generate_demo_result(input_data: Dict[str, Any]) -> Dict[str, Any]:
     risk_tolerance = input_data.get("risk_tolerance", 50)
     risk_level = _get_risk_level(risk_score, risk_tolerance)
 
-    risk_colors = {
-        "Low": "#22c55e",
-        "Medium": "#f59e0b",
-        "High": "#f97316",
-        "Extreme": "#ef4444",
-    }
-    risk_color = risk_colors.get(risk_level, "#f59e0b")
+    risk_color = EN_RISK_COLORS.get(risk_level, _THEME_RISK_COLORS.get("sedang", "#f59e0b"))
 
     # Risk factors
     risk_factors = {}
@@ -442,13 +474,14 @@ def _post_process_results(
     # Apply tolerance-adjusted risk level
     risk_level = _get_risk_level(risk_score, risk_tolerance)
 
-    risk_colors = {
-        "Low": "#22c55e",
-        "Medium": "#f59e0b",
-        "High": "#f97316",
-        "Extreme": "#ef4444",
-    }
-    risk_color = risk_colors.get(risk_level, "#f59e0b")
+    # Audit Fase 2a: use single-source colors from theme (via EN_RISK_COLORS
+    # above). The previous hardcoded dict had ``High: #f97316`` which was
+    # inconsistent with both theme.RISK_COLORS ("tinggi": "#ef4444") and the
+    # other post-process path at line 194 — for level "High" the marker would
+    # appear orange here but red elsewhere.
+    risk_color = EN_RISK_COLORS.get(
+        risk_level, _THEME_RISK_COLORS.get("sedang", "#f59e0b")
+    )
 
     # Generate temporal forecast
     temporal_forecast = _generate_temporal_forecast(

@@ -130,12 +130,16 @@ def render_weather_info(weather_data: Dict[str, Any]) -> None:
         st.markdown(f"**⚠️ Risiko Angin:** {wind_risk['level']}")
         st.text(wind_risk["description"])
 
-    # Hourly forecast (if available)
-    if "hourly_forecast" in weather_data:
+    # Hourly forecast (if available). Audit Fase 2b: ``weather_api.py``
+    # returns the 24-hour forecast under the key ``"forecast"`` (line ~174),
+    # NOT ``"hourly_forecast"``. The previous key mismatch meant this block
+    # never executed — the 24-hour temp/humidity plot was missing entirely.
+    forecast_data = weather_data.get("forecast") or weather_data.get("hourly_forecast")
+    if forecast_data:
         st.markdown("---")
         st.markdown("**Prakiraan 24 Jam:**")
 
-        forecast_df = pd.DataFrame(weather_data["hourly_forecast"])
+        forecast_df = pd.DataFrame(forecast_data)
 
         col_chart1, col_chart2 = st.columns(2)
 

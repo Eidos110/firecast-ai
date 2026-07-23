@@ -180,8 +180,13 @@ def get_location_data(lat: float, lon: float) -> Dict[str, Any]:
             ) \
             .map(_mask_s2_clouds)
 
-        # Get the least cloudy image
-        s2_image = s2_collection.sort('CLOUDY_PIXEL_PERCENTAGE', False).first()
+        # Get the least cloudy image. Audit Fase 2d: the original call used
+        # ``.sort('CLOUDY_PIXEL_PERCENTAGE', False)`` — in the Earth Engine
+        # Python API the second argument is ``ascending`` (not descending),
+        # so ``False`` returned images sorted cloud-desc = MOST cloudy first.
+        # ``.first()`` therefore returned the cloudiest image, not the least.
+        # Switch to ``ascending=True`` so the least-cloudy image is first.
+        s2_image = s2_collection.sort('CLOUDY_PIXEL_PERCENTAGE', True).first()
         if s2_image is None:
             raise ValueError("No cloud-free Sentinel-2 image found in last 30 days")
 
@@ -237,6 +242,10 @@ def get_location_data(lat: float, lon: float) -> Dict[str, Any]:
             "B12": band_data.get("B12", 0.0),
             "land_cover_class": land_cover_class,
             "land_cover_code": land_cover_code,
+            # Audit Fase 2d: tag the source so downstream UI can distinguish
+            # genuine GEE data from the synthetic fallback returned when GEE
+            # is unavailable (currently signalled with the same st.success).
+            "source": "Google Earth Engine",
         }
 
         logger.info(f"GEE data fetched for {lat:.4f},{lon:.4f}: "
@@ -263,4 +272,7 @@ def _get_synthetic_fallback() -> Dict[str, Any]:
         "B12": 0.25,
         "land_cover_class": 1,
         "land_cover_code": 10,
+        # Audit Fase 2d: synthetic fallback data; UI must not present this as
+        # real satellite data (was the bug at sidebar.py:714).
+        "source": "synthetic-fallback",
     }
