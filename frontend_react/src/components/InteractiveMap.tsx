@@ -1,9 +1,18 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet-draw';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-draw/dist/leaflet.draw.css';
 import { Streamlit, ComponentProps } from 'streamlit-component-lib';
+// Audit Fase 2a: risk-tier tokens & color resolver come from the shared
+// ``theme/risk`` module (single source for the React component-kit, mirroring
+// the Python ``frontend/utils/theme.py`` constants). Previously this file
+// hand-copied thresholds/colors and they drifted (Extreme was #991b1b here
+// while theme uses #7f1d1d for sangat_tinggi).
+import {
+  getRiskColor as _resolveRiskColor,
+  getRiskLevel as _resolveRiskLevel,
+} from '../theme/risk';
 
 // Helper to safely call Streamlit methods
 const safeSetComponentReady = () => {
@@ -68,11 +77,14 @@ export function InteractiveMap(props: ComponentProps) {
 
       // Kontrol Draw (hanya Polygon)
       const drawControl = new L.Control.Draw({
-        draw: { 
-          polygon: true, 
-          rectangle: false, 
-          circle: false, 
-          marker: false, 
+        draw: {
+          polygon: {
+            allowIntersection: false,
+            showArea: true
+          } as any,
+          rectangle: false,
+          circle: false,
+          marker: false,
           polyline: false,
           circlemarker: false
         },
@@ -164,9 +176,9 @@ export function InteractiveMap(props: ComponentProps) {
         });
       });
 
-    } catch (error) {
-      console.error('Error initializing InteractiveMap:', error);
-      setError(`Failed to initialize map: ${error instanceof Error ? error.message : String(error)}`);
+    } catch (initError) {
+      console.error('Error initializing InteractiveMap:', initError);
+      setError(`Failed to initialize map: ${initError instanceof Error ? initError.message : String(initError)}`);
     } finally {
       // Notify Streamlit that component is ready (always)
       try {
@@ -196,6 +208,7 @@ export function InteractiveMap(props: ComponentProps) {
         drawnItems.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once init; error only read in finally
   }, []);
 
   // Terima data dari Python (misal: hasil prediksi untuk di-render)
@@ -208,10 +221,10 @@ export function InteractiveMap(props: ComponentProps) {
         try {
           const geoJSON = L.geoJSON(props.args.predictionOverlay, {
             pointToLayer: (feature, latlng) => {
-              const properties = feature.properties || {};
-              const risk = properties.prediction || 0;
+              const properties = (feature?.properties || {}) as any;
+              const risk = (properties as any).prediction || 0;
               const riskLevel = getRiskLevel(risk);
-              const markerType = properties.marker_type || 'batch';
+              const markerType = (properties as any).marker_type || 'batch';
 
               let marker: L.CircleMarker | L.Marker;
 
@@ -267,7 +280,7 @@ export function InteractiveMap(props: ComponentProps) {
               // Click handler: send to Streamlit and prevent map click
               marker.on('click', (e: L.LeafletMouseEvent) => {
                 const lat = e.latlng.lat;
-                const lon = e.latlng.lng;
+                const lng = e.latlng.lng;
                 // Stop event from bubbling to map click
                 if (mapInstance.current) {
                   L.DomEvent.stopPropagation(e);
@@ -287,8 +300,8 @@ export function InteractiveMap(props: ComponentProps) {
             },
           style: (feature) => {
             // Styling untuk polygons
-            const properties = feature.properties || {};
-            const risk = properties.prediction || 0;
+            const properties = feature?.properties || {};
+            const risk = (properties as any).prediction || 0;
             const riskLevel = getRiskLevel(risk);
             
             return {
@@ -301,8 +314,8 @@ export function InteractiveMap(props: ComponentProps) {
           },
           onEachFeature: (feature, layer) => {
             // Add popup for each feature
-            const properties = feature.properties || {};
-            const risk = properties.prediction || 0;
+            const properties = (feature?.properties || {}) as any;
+            const risk = (properties as any).prediction || 0;
             const riskLevel = getRiskLevel(risk);
             
             layer.bindPopup(`
@@ -338,7 +351,7 @@ export function InteractiveMap(props: ComponentProps) {
   }, [props.args.predictionOverlay]);
 
   return (
-    <div className="map-container" ref={mapRef} style={{ height: props.height || 600 }}>
+    <div className="map-container" ref={mapRef} style={{ height: props.args?.height || 600 }}>
       {error && (
         <div className="error-display" role="alert">
           <strong>Map Error</strong>
@@ -352,22 +365,11 @@ export function InteractiveMap(props: ComponentProps) {
   );
 }
 
-// Helper functions for risk visualization
-function getRiskLevel(risk: number): string {
-  if (risk >= 0.8) return 'Extreme';
-  if (risk >= 0.6) return 'High';
-  if (risk >= 0.3) return 'Medium';
-  return 'Low';
-}
-
-function getRiskColor(riskLevel: string): string {
-  const colors: Record<string, string> = {
-    'Low': '#22c55e',
-    'Medium': '#f59e0b',
-    'High': '#ef4444',
-    'Extreme': '#991b1b'
-  };
-  return colors[riskLevel] || '#f59e0b';
-}
+// Helper functions for risk visualization.
+// Audit Fase 2a: route through the shared ``theme/risk`` module instead of
+// hand-copying thresholds/colors here. The local references below remain so
+// existing call sites (in the same file) keep working without churn.
+const getRiskLevel = (risk: number): string => _resolveRiskLevel(risk);
+const getRiskColor = (riskLevel: string): string => _resolveRiskColor(riskLevel as any);
 
 export default InteractiveMap;

@@ -8,6 +8,7 @@ function App() {
       height: 600,
       predictionOverlay: null
     },
+    width: 600,
     disabled: false,
     theme: {
       base: 'light',

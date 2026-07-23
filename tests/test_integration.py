@@ -3,9 +3,8 @@ Integration Tests for FireCast
 Test end-to-end prediction pipeline
 """
 
-import unittest
 import sys
-import numpy as np
+import unittest
 from pathlib import Path
 
 # Add parent directory to path

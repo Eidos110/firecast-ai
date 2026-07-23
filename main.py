@@ -5,8 +5,9 @@ FastAPI entry-point.  We re-export the real FastAPI app from
 src.geo_api:app so the auto-detected start command works without extra
 configuration.
 """
-import sys
+
 import os
+import sys
 
 # Ensure src/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))

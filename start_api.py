@@ -5,6 +5,7 @@ Works no matter whether Render checks out the repo at /app or at the default
 build working directory. Avoids hardcoded absolute paths so this file can
 safely live in the repo root and still be invoked as `python /app/start_api.py`.
 """
+
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ for candidate in [HERE, HERE.parent, Path("/app")]:
 os.environ["PYTHONPATH"] = os.pathsep.join(sys.path)
 
 import uvicorn  # noqa: E402
+
 from src.geo_api import app  # noqa: E402
 
 port = int(os.environ.get("PORT", os.environ.get("API_PORT", "8000")))
