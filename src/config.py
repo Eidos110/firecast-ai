@@ -221,10 +221,28 @@ class WeatherAPIConfig:
     openweather_url: str = "https://api.openweathermap.org/data/2.5"
     bmkg_url: str = "https://api.bmkg.go.id/publik"
 
+    # Audit priority 3 — placeholder strings from .env.example must never be
+    # treated as a valid key. Mirrors the auth.py blacklist pattern so a
+    # forgotten .env copy does not silently make 401/429 routes "look"
+    # configured while every request actually fails upstream.
+    _OWM_PLACEHOLDER_KEYS = frozenset(
+        {
+            "",
+            "demo_key",
+            "your_openweathermap_api_key_here",
+            "your_api_key_here",
+            "changeme",
+            "PLACEHOLDER",
+        }
+    )
+
     @property
     def has_openweather_key(self) -> bool:
-        """Check if OpenWeather API key is configured."""
-        return self.openweather_key is not None and self.openweather_key != "demo_key"
+        """Check if OpenWeather API key is configured and not a known placeholder."""
+        key = self.openweather_key
+        if key is None:
+            return False
+        return key.strip() not in self._OWM_PLACEHOLDER_KEYS
 
 
 class FireCastConfig:

@@ -149,8 +149,29 @@ def _build_hex_record(hid: str, count: int, avg_prob: float | None) -> dict:
 
 
 # --- FastAPI app ---
+# Audit priority 2 — ORJSONResponse as default response class. orjson is a
+# Rust-backed JSON encoder that is 2-3x faster than stdlib json for the
+# numpy-array-heavy payloads we emit from /api/models and the future
+# /predict REST endpoint. Falls back to FastAPI's default JSONResponse when
+# orjson is unavailable (sandbox without the wheel) — correctness preserved.
+try:
+    from fastapi.responses import ORJSONResponse as _DefaultResponse
+except Exception:  # pragma: no cover — orjson missing
+    _DefaultResponse = None  # type: ignore[assignment]
+
+
+def _response_class_factory():
+    """Pick an appropriate default response class (sandbox-safe)."""
+    if _DefaultResponse is not None:
+        return _DefaultResponse
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse
+
+
 app = FastAPI(
     title="FireCast Geo API",
+    default_response_class=_response_class_factory(),
 )
 
 # --- Rate Limiting ---
@@ -235,3 +256,141 @@ async def get_precompute_progress(request: Request, api_key: str = Depends(get_a
     progress_copy = precompute_progress.copy()
     progress_copy["last_completed"] = list(precompute_progress["last_completed"])
     return progress_copy
+
+
+# ---------------------------------------------------------------------------
+# Admin cache endpoints (Audit priority 4)
+#
+# These let operators drop the in-memory caches WITHOUT restarting the server.
+# Useful after the data CSV is regenerated with fresh rows, or after the
+# model registry is mutated (the prediction cache may serve stale shap arrays
+# otherwise). All endpoints are gated by the same ``X-API-Key`` used for
+# /api/models/* and are rate-limited to 10/min to make scripted polling safe.
+# ---------------------------------------------------------------------------
+@app.post("/admin/cache/invalidate")
+@limiter.limit("10/minute")
+async def admin_cache_invalidate(request: Request, api_key: str = Depends(get_api_key)):
+    """Drop every in-process cache so the next request recomputes fresh.
+
+    Returns a dictionary describing what was cleared. Fails 500 only if the
+    handler itself crashes (e.g. cache.load ImportError) — never silently 401.
+    """
+    cleared: dict[str, int] = {}
+
+    # 1. CSV DataFrame cache (mtime-based _DataCache in this module)
+    try:
+        _data_cache.invalidate()
+        cleared["csv_data_cache"] = 1
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("Failed to invalidate _data_cache: %s", e)
+        cleared["csv_data_cache"] = 0
+
+    # 2. Module-globals model loader cache (predict.py lazily binds
+    #     load_cnn_model/load_lgbm_model/...). There is no module-global
+    #     ``clear_model_cache`` symbol anymore (Fase 3 refactor); the only
+    #     state worth dropping is the ``_init_models()`` success flag, which
+    #     is reset by simply unbinding predict globals. Safe noop here.
+    try:
+        import src.predict as _predict_mod
+
+        # Drop the runtime-bound model loaders so the next prediction
+        # re-resolves them (catches stale file paths after registry changes).
+        for _attr in (
+            "load_cnn_model",
+            "load_lgbm_model",
+            "load_xgb_model",
+            "predict_xgb",
+            "load_causal_gru_model",
+            "predict_causal_gru",
+            "load_bigru_model",
+            "predict_bigru",
+            "evaluate_ensemble",
+        ):
+            if hasattr(_predict_mod, _attr):
+                delattr(_predict_mod, _attr)
+        cleared["model_cache"] = 1
+    except Exception as e:  # pragma: no cover — graceful
+        logger.debug("model cache invalidation skipped: %s", e)
+        cleared["model_cache"] = 0
+
+    # 3. Audit priority 2 — TTLCache used by predict_fire_risk(use_cache=True)
+    try:
+        from src.cache import cache_clear as _clear_pred_cache
+
+        cleared["prediction_cache"] = int(_clear_pred_cache())
+    except Exception as e:  # pragma: no cover
+        logger.debug("prediction cache invalidation skipped: %s", e)
+        cleared["prediction_cache"] = 0
+
+    return {"status": "ok", "cleared": cleared}
+
+
+@app.get("/admin/cache/stats")
+@limiter.limit("30/minute")
+async def admin_cache_stats(request: Request, api_key: str = Depends(get_api_key)):
+    """Return a snapshot of every in-process cache for operational dashboards."""
+    stats: dict[str, dict] = {}
+
+    # Prediction TTLCache metadata (bounded TTL slot count, no payloads).
+    try:
+        from src.cache import cache_stats as _pred_stats
+
+        stats["prediction_cache"] = _pred_stats()
+    except Exception as e:  # pragma: no cover
+        logger.debug("prediction cache stats skipped: %s", e)
+        stats["prediction_cache"] = {"enabled": False}
+
+    # CSV data cache snapshot — expose mtime + presence, not the DataFrame.
+    try:
+        stats["csv_data_cache"] = {
+            "loaded": _data_cache._df is not None,
+            "mtime_epoch": float(_data_cache._mtime),
+        }
+    except Exception as e:  # pragma: no cover
+        stats["csv_data_cache"] = {"error": str(e)}
+
+    return {"status": "ok", "stats": stats}
+
+
+# ---------------------------------------------------------------------------
+# Database & Persistence — Audit priority (Database & Persistence)
+# ---------------------------------------------------------------------------
+# Since we no longer deploy to Railway, there is no scheduled cron to compact
+# the ``Prediction`` log table. These endpoints let operators purge old rows
+# without a restart. Default window is 30 days, configurable via env var
+# ``FIRECAST_PREDICTION_RETENTION_DAYS`` or directly through the query string.
+# Both endpoints are gated by ``X-API-Key``.
+# ---------------------------------------------------------------------------
+@app.post("/admin/db/purge")
+@limiter.limit("5/minute")
+async def admin_db_purge(
+    request: Request,
+    api_key: str = Depends(get_api_key),
+    days: int | None = None,
+):
+    """Run the Prediction retention policy and return deletion stats.
+
+    Pass ``?days=14`` to override the env-configured window for this call
+    only (e.g. rapid disk-clean during a prod incident).
+    """
+    try:
+        from src.database import purge_old_predictions
+
+        result = purge_old_predictions(days=days)
+        return {"status": "ok", "result": result}
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("admin_db_purge failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/admin/db/stats")
+@limiter.limit("30/minute")
+async def admin_db_stats(request: Request, api_key: str = Depends(get_api_key)):
+    """Return Prediction table row count + oldest/newest timestamps."""
+    try:
+        from src.database import prediction_stats
+
+        result = prediction_stats()
+        return {"status": "ok", "stats": result}
+    except Exception as e:  # pragma: no cover
+        return {"status": "error", "error": str(e)}

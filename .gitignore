@@ -122,6 +122,8 @@ frontend_react/node_modules/
 # Keep built frontend assets for deployment
 # frontend_react/build/  (commented out to include in git)
 frontend_react/dist/
+# Lighthouse CI artifacts (audit priority 5)
+frontend_react/.lighthouseci/
 
 # Temporary files
 *.tmp

@@ -10,7 +10,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +294,124 @@ def get_saved_locations() -> list:
     except Exception as e:
         logger.warning("Failed to get saved locations: %s", e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Retention policy (Audit priority: Database & Persistence)
+# ---------------------------------------------------------------------------
+# The ``Prediction`` table grows unbounded in long-lived deployments (Streamlit
+# dev session, HF Spaces persistent disk, or local laptop). Compact it via an
+# explicit purge call rather than auto-VACUUM, which would block the SQLite
+# event loop on large tables. The default retention is 30 days; override via
+#   FIRECAST_PREDICTION_RETENTION_DAYS=14  (env)
+# or pass ``days`` explicitly. The function returns a dict suitable for admin
+# telemetry. Backend-agnostic: noop bila sqlmodel/sqlite missing.
+#
+# NOTE: not tied to Railway cron any more — invoke from Streamlit startup
+# (frontend/app.py), a CLI admin script, or periodic APScheduler job.
+# ---------------------------------------------------------------------------
+
+
+def _default_retention_days() -> int:
+    """Read retention policy from env (portable, backend-agnostic)."""
+    raw = os.environ.get("FIRECAST_PREDICTION_RETENTION_DAYS")
+    if not raw:
+        return 30
+    try:
+        days = int(raw)
+        return days if days > 0 else 30
+    except ValueError:
+        logger.warning("Invalid FIRECAST_PREDICTION_RETENTION_DAYS=%r, fallback to 30", raw)
+        return 30
+
+
+def purge_old_predictions(days: int | None = None) -> dict[str, Any]:
+    """Delete Prediction rows older than ``days`` days (default env override).
+
+    Returns:
+        {"deleted": int, "retained_after": int, "days": int} on success.
+        {"enabled": False, ...} bila sqlmodel missing or engine unavailable.
+    """
+    if SQLModel is None:
+        return {"enabled": False, "deleted": 0, "reason": "sqlmodel unavailable"}
+
+    retention_days = days if days is not None else _default_retention_days()
+    cutoff = datetime.now() - timedelta(days=retention_days)
+
+    try:
+        engine = get_engine()
+        if engine is None:
+            return {"enabled": False, "deleted": 0, "reason": "no engine"}
+
+        with Session(engine) as session:
+            # count before deletion (cheap on SQLite)
+            total_before = session.exec(select(Prediction)).all()
+            count_before = len(total_before)
+
+            # delete older rows — SQLite supports the bulk delete in sqlmodel.
+            stmt = select(Prediction).where(Prediction.created_at < cutoff)
+            old_rows = session.exec(stmt).all()
+            for row in old_rows:
+                session.delete(row)
+            session.commit()
+
+            total_after = session.exec(select(Prediction)).all()
+            count_after = len(total_after)
+
+            # Run incremental VACUUM (only meaningful for SQLite) so disk
+            # space is reclaimed. Wrap in try/except because non-sqlite
+            # backends (postgres) will raise.
+            try:
+                if engine.dialect.name == "sqlite":  # pragma: no cover
+                    with engine.connect() as conn:
+                        conn.exec_driver_sql("VACUUM")
+            except Exception as e:  # pragma: no cover — VACUUM is best-effort
+                logger.debug("VACUUM skipped: %s", e)
+
+        logger.info(
+            "purge_old_predictions: deleted %d/%d rows (retention=%d days)",
+            count_before - count_after,
+            count_before,
+            retention_days,
+        )
+        return {
+            "enabled": True,
+            "deleted": count_before - count_after,
+            "retained_after": count_after,
+            "days": retention_days,
+        }
+
+    except Exception as e:
+        logger.warning("purge_old_predictions failed: %s", e)
+        return {"enabled": False, "deleted": 0, "reason": str(e)}
+
+
+def prediction_stats() -> dict[str, Any]:
+    """Return row count + oldest/newest timestamps for the Prediction table."""
+    if SQLModel is None:
+        return {"enabled": False, "rows": 0}
+
+    try:
+        engine = get_engine()
+        if engine is None:
+            return {"enabled": False, "rows": 0, "reason": "no engine"}
+
+        with Session(engine) as session:
+            rows = session.exec(select(Prediction)).all()
+            count = len(rows)
+            if count == 0:
+                return {"enabled": True, "rows": 0, "oldest": None, "newest": None}
+            oldest = min(r.created_at for r in rows if r.created_at is not None)
+            newest = max(r.created_at for r in rows if r.created_at is not None)
+            return {
+                "enabled": True,
+                "rows": count,
+                "oldest": oldest.isoformat() if oldest else None,
+                "newest": newest.isoformat() if newest else None,
+            }
+    except Exception as e:
+        logger.warning("prediction_stats failed: %s", e)
+        return {"enabled": False, "rows": 0, "reason": str(e)}
 
 
 if __name__ == "__main__":

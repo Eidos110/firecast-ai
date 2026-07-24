@@ -189,5 +189,91 @@ class TestAuthPlaceholderGuard(_ApiTestBase):
             config.get_config()
 
 
+@unittest.skipUnless(_HTTPX_OK, "httpx/fastapi not installed — skipping API tests")
+class TestAdminCacheEndpoints(_ApiTestBase):
+    """Audit priority 4 — /admin/cache/* lets ops drop in-memory caches
+    without restarting the server."""
+
+    def test_invalidate_requires_api_key(self):
+        resp = self.client.post("/admin/cache/invalidate")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_invalidate_rejects_wrong_key(self):
+        resp = self.client.post("/admin/cache/invalidate", headers={"X-API-Key": "wrong"})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_invalidate_with_valid_key(self):
+        # The data csv may or may not be loadable in the sandbox, but the
+        # endpoint must always return ok + a cleared dict (best-effort).
+        resp = self.client.post("/admin/cache/invalidate", headers=self._headers())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body.get("status"), "ok")
+        cleared = body.get("cleared", {})
+        # Each named cache must report an integer 0/1 count even if cache is absent.
+        for _name, count in cleared.items():
+            self.assertIsInstance(count, int)
+        # csv_data_cache + prediction_cache should be present per the implementation.
+        self.assertIn("csv_data_cache", cleared)
+        self.assertIn("prediction_cache", cleared)
+
+    def test_stats_requires_api_key(self):
+        resp = self.client.get("/admin/cache/stats")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_stats_with_valid_key_returns_snapshot(self):
+        resp = self.client.get("/admin/cache/stats", headers=self._headers())
+        self.assertIn(resp.status_code, (200,))
+        body = resp.json()
+        self.assertEqual(body.get("status"), "ok")
+        stats = body.get("stats", {})
+        self.assertIn("prediction_cache", stats)
+        self.assertIn("csv_data_cache", stats)
+
+
+@unittest.skipUnless(_HTTPX_OK, "httpx/fastapi not installed — skipping API tests")
+class TestAdminDbRetention(_ApiTestBase):
+    """Audit priority (Database & Persistence) — retention policy endpoints."""
+
+    def test_purge_requires_api_key(self):
+        resp = self.client.post("/admin/db/purge")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_purge_with_valid_key(self):
+        # The DB may be sqlite file that exists or not — endpoint must never
+        # raise; it returns an explicit enabled/False reason when sqlmodel is
+        # missing or engine unavailable.
+        resp = self.client.post("/admin/db/purge", headers=self._headers())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body.get("status"), "ok")
+        result = body.get("result", {})
+        # Either enabled succeeded or explicitly disabled for a stated reason.
+        self.assertIn("enabled", result)
+        self.assertIsInstance(result.get("deleted", 0), int)
+
+    def test_purge_with_days_param(self):
+        resp = self.client.post("/admin/db/purge?days=7", headers=self._headers())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        result = body.get("result", {})
+        # Days should propagate through when enabled.
+        if result.get("enabled"):
+            self.assertEqual(result.get("days"), 7)
+
+    def test_stats_requires_api_key(self):
+        resp = self.client.get("/admin/db/stats")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_stats_with_valid_key(self):
+        resp = self.client.get("/admin/db/stats", headers=self._headers())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body.get("status"), "ok")
+        stats = body.get("stats", {})
+        self.assertIn("enabled", stats)
+        self.assertIsInstance(stats.get("rows", 0), int)
+
+
 if __name__ == "__main__":
     unittest.main()
