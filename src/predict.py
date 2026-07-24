@@ -869,6 +869,7 @@ def predict_fire_risk(
     features: dict[str, Any],
     model_version: str | None = None,
     model_type: str = "new",
+    use_cache: bool = False,
 ) -> dict[str, Any]:
     """
     Predict fire risk from input features.
@@ -890,6 +891,11 @@ def predict_fire_risk(
             - vegetation_type: str
         model_version: Optional model version string. If None, uses active version.
         model_type: Model type to use - "legacy" for old CNN+LGBM, "new" for stacking (default: "new")
+        use_cache: If True, the result is served from a 5-minute TTL cache
+            keyed by ``(features, model_version, model_type)`` when available.
+            Default False to preserve deterministic behaviour for callers
+            that re-mutate the returned dict (e.g. test_prediction). Set
+            True only at idempotent call sites (Streamlit rerun, REST GET).
 
     Returns:
         Dictionary with prediction results:
@@ -908,6 +914,23 @@ def predict_fire_risk(
     Raises:
         PredictionError: If prediction fails
     """
+    # Audit priority 2 — best-effort TTL cache for idempotent inference.
+    # Misses and disabled caches fall through transparently.
+    if use_cache:
+        try:
+            from src.cache import cache_get, cache_set
+
+            _cache_key = {
+                "features": features,
+                "model_version": model_version,
+                "model_type": model_type,
+            }
+            hit, cached = cache_get(_cache_key)
+            if hit:
+                logger.debug("predict_fire_risk cache hit")
+                return cached
+        except Exception as e:  # pragma: no cover — cache must never block
+            logger.debug("cache_get skipped: %s", e)
     try:
         logger.info(f"Running prediction with features: {features}")
         logger.info(f"Using model_type: {model_type}")
@@ -1167,6 +1190,20 @@ def predict_fire_risk(
             logger.info(
                 f"Prediction result: {result['risk_level']} (score: {result['risk_score']:.3f})"
             )
+            if use_cache:
+                try:
+                    from src.cache import cache_set
+
+                    cache_set(
+                        {
+                            "features": features,
+                            "model_version": model_version,
+                            "model_type": model_type,
+                        },
+                        result,
+                    )
+                except Exception as e:  # pragma: no cover — never block on write
+                    logger.debug("cache_set skipped: %s", e)
             return result
 
     except Exception as e:

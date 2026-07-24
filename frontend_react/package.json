@@ -10,7 +10,9 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lhci": "lhci autorun",
+    "preview:ci": "vite preview --port 4173 --strictPort --host"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -36,6 +38,7 @@
     "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.8",
-    "vitest": "^1.0.0"
+    "vitest": "^1.0.0",
+    "@lhci/cli": "^0.13.0"
   }
 }

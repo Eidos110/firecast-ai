@@ -126,6 +126,35 @@ class TestConfigValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             FireCastConfig()
 
+    @patch.dict(os.environ, {"OPENWEATHER_API_KEY": "your_openweathermap_api_key_here"})
+    def test_owm_placeholder_rejected(self):
+        """WeatherAPIConfig must treat .env.example placeholder as missing.
+
+        Audit priority 3 — a forgotten .env copy of the example values must
+        not silently masquerade as a configured key. ``has_openweather_key``
+        mirrors the auth.py placeholder-blacklist pattern.
+        """
+        from src.config import WeatherAPIConfig
+
+        cfg = WeatherAPIConfig()
+        self.assertFalse(cfg.has_openweather_key)
+
+    @patch.dict(os.environ, {"OPENWEATHER_API_KEY": "REDACTED_OPENWEATHER_KEY"})
+    def test_owm_real_key_accepted(self):
+        """A 32-hex character key (production shape) is accepted as configured."""
+        from src.config import WeatherAPIConfig
+
+        cfg = WeatherAPIConfig()
+        self.assertTrue(cfg.has_openweather_key)
+
+    @patch.dict(os.environ, {"OPENWEATHER_API_KEY": ""}, clear=False)
+    def test_owm_empty_string_rejected(self):
+        """An empty OPENWEATHER_API_KEY env var behaves as "not configured"."""
+        from src.config import WeatherAPIConfig
+
+        cfg = WeatherAPIConfig()
+        self.assertFalse(cfg.has_openweather_key)
+
 
 if __name__ == "__main__":
     unittest.main()

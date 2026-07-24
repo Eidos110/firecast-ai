@@ -91,6 +91,10 @@ earthengine-api>=0.1.371
 # =============================================================================
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+# orjson: 2-3x faster JSON serialization for endpoints that emit large arrays
+# (prediction prob+shap, /api/models listing). Drop-in via ORJSONResponse.
+orjson>=3.10.0
+cachetools>=5.5.0  # TTLCache for short-lived per-request memoization
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
