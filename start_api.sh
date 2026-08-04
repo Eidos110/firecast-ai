@@ -32,9 +32,13 @@ fi
 # Ensure PYTHONPATH
 export PYTHONPATH=/app
 
-echo "Starting uvicorn on port $PORT..."
+# Honor explicit hosts if present (HF Spaces / Render both bind 0.0.0.0).
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-7860}"
+
+echo "Starting uvicorn on ${HOST}:${PORT}..."
 exec uvicorn src.geo_api:app \
-    --host 0.0.0.0 \
+    --host "$HOST" \
     --port "$PORT" \
     --log-level info \
     --proxy-headers \

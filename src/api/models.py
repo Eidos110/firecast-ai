@@ -27,7 +27,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src import config
 from src.auth import get_api_key
 from src.database import ModelVersion, Session, get_engine, select
 from src.models.registry import (
@@ -67,15 +66,17 @@ class RegisterModelBody(BaseModel):
 def _validate_model_root(file_path: str) -> None:
     """Reject file_path that escapes the whitelisted model directories.
 
-    Mirrors the whitelist enforced by :func:`get_model_path` so a model
-    registered here can later be retrieved. Raises HTTP 400 on violation.
+    Uses the single-source helper in :mod:`src.utils.path_safety` so the
+    whitelist never drifts between ``register_model_version`` (this router)
+    and ``get_model_path`` (registry). Raises HTTP 400 on violation.
     """
     try:
-        cfg = config.get_config()
-        allowed_roots = [
-            Path(cfg.paths.models_dir).resolve(),
-            Path(cfg.paths.new_model_dir).resolve(),
-        ]
+        from src.utils.path_safety import (
+            allowed_model_roots,
+            is_path_within_allowed_roots,
+        )
+
+        allowed_roots = allowed_model_roots()
         resolved = Path(file_path).resolve()
     except Exception as exc:
         raise HTTPException(
@@ -83,17 +84,7 @@ def _validate_model_root(file_path: str) -> None:
             detail=f"Cannot resolve file_path {file_path!r}: {exc}",
         )
 
-    # Path must be inside one of the whitelisted roots (case-insensitive
-    # on Windows). ``Path.relative_to`` raises ValueError otherwise.
-    ok = False
-    for root in allowed_roots:
-        try:
-            resolved.relative_to(root)
-            ok = True
-            break
-        except ValueError:
-            continue
-    if not ok:
+    if not is_path_within_allowed_roots(resolved, allowed_roots):
         raise HTTPException(
             status_code=400,
             detail=(

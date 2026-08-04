@@ -72,11 +72,15 @@ jobs:
         run: |
           python -m compileall -q src main.py start_api.py
 
-      - name: Pytest with coverage
+      - name: Pytest with coverage (src + frontend/components)
         env:
           PYTHONPATH: ${{ github.workspace }}
           # FastAPI / auth tests need a non-empty secret.
           API_SECRET_KEY: ci-dummy-secret-key-for-github-actions-only
+          # Frontend smoke tests must not hit live OpenWeatherMap (rate-limit safe
+          # + deterministic; see Task 5.2 / tests/test_ui_revamp_integration.py).
+          OPENWEATHER_API_KEY: ci-dummy-owm-key
+          DISABLE_REALTIME_WEATHER: "1"
         shell: bash
         run: |
           python -m pytest tests/ \
@@ -84,9 +88,34 @@ jobs:
               --tb=short \
               --maxfail=1 \
               --cov=src \
+              --cov=frontend/utils \
               --cov-report=term-missing:skip-covered \
               --cov-report=xml \
+              --cov-report=html \
               --cov-fail-under=40
+
+      # (Tahap E): The "Frontend components coverage gate" step and the
+      # Streamlit AppTest smoke step that targeted ``frontend/app.py`` were
+      # REMOVED when TAHAP A deleted the Streamlit-native UI. The row-by-row
+      # coverage gate depended on ``frontend/components/{status_bar,
+      # right_diagnostic, bottom_bar, shap_waterfall, temporal_band,
+      # interactive_map}.py`` (all gone) plus Streamlit-test files that no
+      # longer exist. The React SPA tests live under ``frontend_react/src/``
+      # and are run by the dedicated ``frontend`` job below.
+      - name: Frontend utils coverage (TAHAP E consolidation)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          API_SECRET_KEY: ci-dummy-secret-key-for-github-actions-only
+          OPENWEATHER_API_KEY: ci-dummy-owm-key
+          DISABLE_REALTIME_WEATHER: "1"
+        shell: bash
+        run: |
+          python -m pytest tests/frontend/ \
+              -p no:randomly \
+              --tb=short \
+              --cov=frontend/utils/log_handler.py \
+              --cov-report=term-missing \
+              --cov-report=xml:coverage-frontend.xml
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
@@ -95,6 +124,14 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload HTML coverage report
+        if: always() && matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # Job 2: Frontend React — typecheck, lint, vitest

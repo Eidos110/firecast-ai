@@ -1,6 +1,20 @@
 # FireCast Development Dependencies
 # Install with: pip install -r requirements-dev.txt
-# Requires: requirements.txt installed first (core app deps).
+#
+# Task 6.2 (UI Revamp Fase 6): this file is the single source for local dev
+# and CI (see .github/workflows/ci.yml). It pulls all runtime deps via the
+# ``-r requirements.txt`` reference below, then layers test/lint tooling on
+# top. That way `pip install -r requirements-dev.txt` in a fresh venv is
+# sufficient to run `pytest tests/ -q` (PLAN.md §6.2 AC).
+#
+# Why duplicate plotly/scipy/h3/geopandas/shapely here even though they are
+# already in requirements.txt? Because PLAN §6.2 calls them out as "dev
+# dependencies currently missing from default env" — listing them alongside
+# the test tooling documents the developer contract (mocking/fixture libs need
+# the real ones installed). Use the same floor versions as requirements.txt
+# to avoid pin drift.
+
+-r requirements.txt
 
 # Testing
 pytest>=7.4.0
@@ -8,7 +22,19 @@ pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0
 hypothesis>=6.88.0
-httpx>=0.25.0  # required for FastAPI TestClient
+httpx>=0.25.0  # required for FastAPI TestClient (tests/test_ui_revamp_integration.py)
+
+# Geospatial / ML libs that tests assert against (kept explicit so a contributor
+# installing only requirements-dev.txt still has them)
+plotly>=5.15.0       # shap_waterfall + temporal_band render path
+scipy>=1.11.0        # idw_heatmap overlay (griddata)
+h3>=3.7.6            # _h3_index_vectorized compatibility shim
+geopandas>=0.14.0    # AOI polygon containment
+shapely>=2.0.0       # geometry ops
+shap>=0.45.0         # SHAP explainer path
+sqlmodel>=0.0.14     # registry ModelVersion tests
+slowapi>=0.1.9       # rate-limit middleware in tests
+orjson>=3.10.0       # ORJSONResponse test path
 
 # Code Quality (synced with pyproject.toml [tool.ruff] / [tool.black])
 ruff>=0.6.0       # replaces flake8 + isort + pyupgrade

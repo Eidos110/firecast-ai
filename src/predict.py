@@ -6,7 +6,6 @@ Functions for running fire risk predictions using the ensemble model.
 
 import json
 import logging
-import math
 import os
 import pickle
 import sys  # for module-global scope access in _init_models()
@@ -474,25 +473,11 @@ def predict_batch(
         cnn_probs = np.array(cnn_probs).flatten()
         logger.info(f"CNN final probs: {cnn_probs[:5]}")
 
-        # Apply MORE AGGRESSIVE calibration to CNN if predictions are near zero
-        # The model seems to output very low values, so we need to scale up significantly
-        cnn_mean = cnn_probs.mean()
-        logger.info(f"CNN mean probability: {cnn_mean:.6f}")
+        # Apply calibration via the shared helper (src/calibration.py) so the
+        # CNN/LGBM mean-shift heuristics live in one unit-testable place.
+        from src.calibration import calibrate_cnn_probs
 
-        if cnn_mean < 0.1:
-            # Very aggressive scaling for near-zero predictions
-            # Map 0.0-0.1 to 0.1-0.5 range
-            cnn_calibrated = cnn_probs * 5.0 + 0.1
-            cnn_calibrated = np.clip(cnn_calibrated, 0.0, 1.0)
-            cnn_probs = cnn_calibrated
-            logger.info(f"CNN AGGRESSIVE CALIBRATED: {cnn_probs[:5]}")
-        elif cnn_mean < 0.25:
-            # Moderate scaling for low predictions
-            # Map 0.0-0.25 to 0.1-0.6 range
-            cnn_calibrated = cnn_probs * 2.0 + 0.1
-            cnn_calibrated = np.clip(cnn_calibrated, 0.0, 1.0)
-            cnn_probs = cnn_calibrated
-            logger.info(f"CNN CALIBRATED: {cnn_probs[:5]}")
+        cnn_probs = calibrate_cnn_probs(cnn_probs)
     except Exception as e:
         logger.error(f"CNN prediction failed: {e}")
         raise PredictionError(f"CNN prediction failed: {e}")
@@ -504,28 +489,15 @@ def predict_batch(
         lgbm_probs = lgbm_model.predict(X)
         logger.info(f"LightGBM raw predictions: {lgbm_probs[:5]}")
 
-        # Apply calibration if LightGBM predictions are too extreme
-        lgbm_mean = lgbm_probs.mean()
-        logger.info(f"LightGBM mean probability: {lgbm_mean:.6f}")
+        from src.calibration import calibrate_lgbm_probs
 
-        if lgbm_mean > 0.75:
-            # Too high - scale down
-            lgbm_calibrated = np.where(
-                lgbm_probs > 0.5, 0.5 + (lgbm_probs - 0.5) * 0.7, lgbm_probs * 0.85
-            )
-            lgbm_probs = np.clip(lgbm_calibrated, 0.0, 1.0)
-            logger.info(f"LightGBM CALIBRATED (high): {lgbm_probs[:5]}")
-        elif lgbm_mean < 0.1:
-            # Too low - scale up similar to CNN
-            lgbm_calibrated = lgbm_probs * 5.0 + 0.1
-            lgbm_probs = np.clip(lgbm_calibrated, 0.0, 1.0)
-            logger.info(f"LightGBM CALIBRATED (low): {lgbm_probs[:5]}")
+        lgbm_probs = calibrate_lgbm_probs(lgbm_probs)
     except (AttributeError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(
             f"predict_batch: LightGBM .predict() raised {type(e).__name__}: {e}. "
             "Falling back to _safe_lgbm_predict helper."
         )
-        lgbm_probs = _safe_lgbm_predict(lgbm_model, X, cnn_probs)
+        lgbm_probs = _safe_lgbm_predict(lgbm_model, X)
 
     # Ensure probabilities are in valid range
     cnn_probs = np.clip(cnn_probs, 0.0, 1.0)
@@ -544,7 +516,7 @@ def load_meta_scaler() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) -> np.ndarray:
+def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray) -> np.ndarray:
     """
     Predict fire-risk probabilities from a LightGBM model, handling *every*
     variant of model object that may be deserialised from ``lgb_model.pkl``.
@@ -559,14 +531,13 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
     ③ Any object with a ``predict()`` that returns a 1-D probability array
        → assume values already in [0, 1].
 
-    Falls back to /zero-array-when-available`` when lgbm_model is unusable.
-    IMPORTANT: Never returns None so that callers can always call .min() etc.
+    IMPORTANT: On total prediction failure this function RAISES ``RuntimeError``
+       rather than returning a silent 0.5 array. A bogus "Medium" risk label
+       could hide a real fire (AGENTS.md §3, bug #3). Callers wrap as
+       ``PredictionError`` → HTTP 500, or flag the point as ``status="error"``
+       in AOI batch (see ``src/geo/services.py::run_aoi_batch``).
     """
-    n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
-
     # ── Detect model type ────────────────────────────────────────────────
-    _lgbm_mod_name = type(lgbm_model).__name__.lower() if lgbm_model is not None else ""
-
     try:
         # ── Path A: native lightgbm.Booster — direct raw→sigmoid pipeline ──
         try:
@@ -608,14 +579,10 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray, cnn_probs: np.ndarray) ->
                 return np.clip(arr, 0.0, 1.0)
 
     except Exception as e:
-        logger.warning(f"_safe_lgbm_predict: all LGBM prediction paths failed ({e!r}). ")
-
-    # ── Universal fallback: neutral 0.5 probabilities ────────────────────
-    logger.warning(
-        "LightGBM prediction failed entirely. "
-        "Using neutral 0.5 fallback (results may be unreliable)."
-    )
-    return np.full(n_samples, 0.5, dtype=float)
+        logger.error("_safe_lgbm_predict: all LGBM prediction paths failed: %s", e, exc_info=True)
+        # NEVER return a silent 0.5 (AGENTS.md §3, bug #3). Raise so the caller
+        # can surface a real error instead of a bogus "Medium" risk label.
+        raise RuntimeError(f"LightGBM prediction failed entirely: {e}") from e
 
 
 def predict_stacking(
@@ -707,7 +674,7 @@ def predict_stacking(
     # If Causal GRU disabled, use weighted LGBM+XGB ensemble (full length)
     if not use_causal_gru:
         logger.info("Causal GRU disabled - using LGBM+XGB weighted ensemble")
-        lgbm_probs = _safe_lgbm_predict(lgbm_model, X, None)
+        lgbm_probs = _safe_lgbm_predict(lgbm_model, X)
         logger.info(
             f"LGBM RAW probs: min={lgbm_probs.min():.4f}, max={lgbm_probs.max():.4f}, mean={lgbm_probs.mean():.4f}, std={lgbm_probs.std():.4f}"
         )
@@ -727,7 +694,7 @@ def predict_stacking(
 
     # Full stacking with Causal GRU
     logger.info("Running LightGBM stacking predictions...")
-    lgbm_probs_full = _safe_lgbm_predict(lgbm_model, X, None)
+    lgbm_probs_full = _safe_lgbm_predict(lgbm_model, X)
     logger.info(
         f"LightGBM RAW probs: min={lgbm_probs_full.min():.4f}, max={lgbm_probs_full.max():.4f}, mean={lgbm_probs_full.mean():.4f}, std={lgbm_probs_full.std():.4f}"
     )
@@ -870,6 +837,7 @@ def predict_fire_risk(
     model_version: str | None = None,
     model_type: str = "new",
     use_cache: bool = False,
+    reference_date: datetime | None = None,
 ) -> dict[str, Any]:
     """
     Predict fire risk from input features.
@@ -896,6 +864,12 @@ def predict_fire_risk(
             Default False to preserve deterministic behaviour for callers
             that re-mutate the returned dict (e.g. test_prediction). Set
             True only at idempotent call sites (Streamlit rerun, REST GET).
+        reference_date: Optional explicit anchor date for temporal feature
+            derivations (``month``, ``day``, ``doy``). ROADMAP §3-W1 feeds
+            the SPA Header date-scrubber through this parameter so the
+            "What was the fire risk on 2026-06-15?" workflow recomputes
+            seasonal features instead of always anchoring on "today".
+            ``None`` ⇒ historical behaviour (``datetime.now()``).
 
     Returns:
         Dictionary with prediction results:
@@ -946,8 +920,14 @@ def predict_fire_risk(
             if key not in features:
                 raise PredictionError(f"Missing required feature: {key}")
 
-        # Create feature vector using correct feature set for model type
-        feature_vector = _create_feature_vector(features, use_new_features=(model_type == "new"))
+        # Create feature vector using correct feature set for model type.
+        # ``reference_date`` (optional) shifts the seasonal/month features
+        # to the user-picked date — see ROADMAP §3-W1.
+        feature_vector = _create_feature_vector(
+            features,
+            use_new_features=(model_type == "new"),
+            reference_date=reference_date,
+        )
 
         if model_type == "legacy":
             logger.info(f"Feature vector shape: {feature_vector.shape}")
@@ -1013,8 +993,13 @@ def predict_fire_risk(
                 "model_type": model_name_used,
             }
         else:
-            # Use new stacking model (Causal GRU + LGBM + XGB + NNLS)
-            feature_vector = _create_feature_vector(features, use_new_features=True)
+            # Use new stacking model (Causal GRU + LGBM + XGB + NNLS).
+            # ``reference_date`` mirrors the legacy branch (ROADMAP §3-W1).
+            feature_vector = _create_feature_vector(
+                features,
+                use_new_features=True,
+                reference_date=reference_date,
+            )
             logger.info(f"Feature vector shape: {feature_vector.shape}")
             logger.info(f"Feature vector (first 10): {feature_vector[0][:10]}")
             logger.info(f"Feature vector (last 10): {feature_vector[0][-10:]}")
@@ -1107,7 +1092,7 @@ def predict_fire_risk(
                 # ``_safe_lgbm_predict`` so the same robustness path is used
                 # everywhere, instead of a bare ``lgbm_model.predict`` here).
                 try:
-                    lgbm_fallback = _safe_lgbm_predict(lgbm_model, feature_vector_scaled, None)
+                    lgbm_fallback = _safe_lgbm_predict(lgbm_model, feature_vector_scaled)
                     ensemble_prob = float(np.atleast_1d(lgbm_fallback)[0])
                     logger.warning(f"Used LGBM fallback prediction: {ensemble_prob:.4f}")
                 except Exception as fallback_err:
@@ -1254,8 +1239,13 @@ def _compute_shap_explanation(
     feature_vector: np.ndarray | None = None,
     feature_columns: list | None = None,
 ) -> dict[str, Any]:
-    """
-    Compute SHAP explanation for a single prediction.
+    """Compute SHAP explanation for a single prediction.
+
+    Task 6.7 (UI Revamp Fase 6): body migrated to
+    :func:`src.features.shap_explain.compute_shap_explanation`. This wrapper
+    preserves the underscore alias + kwargs signature that callers in
+    predict.py still use, so behaviour is bit-for-bit identical without any
+    change at call sites.
 
     Args:
         features: Input feature dictionary (fallback if feature_vector not provided).
@@ -1264,422 +1254,54 @@ def _compute_shap_explanation(
         feature_columns: Feature column names corresponding to feature_vector.
 
     Returns:
-        Dictionary with top contributing features and their SHAP values.
+        Dictionary with top contributing features and their SHAP values, or
+        ``{}`` on failure (graceful — never raises per AGENTS.md §6 fallback
+        philosophy).
     """
-    try:
-        import shap
+    from src.features.shap_explain import compute_shap_explanation
 
-        if feature_vector is not None and feature_columns is not None:
-            X = feature_vector
-            feature_names = feature_columns
-        else:
-            df = pd.DataFrame([features])
-            try:
-                with open(config.FEATURE_COLUMNS_PATH) as f:
-                    loaded_feature_columns = json.load(f)
-            except Exception:
-                loaded_feature_columns = list(features.keys())
-            available_cols = [col for col in loaded_feature_columns if col in df.columns]
-            if not available_cols:
-                return {}
-            X = df[available_cols].values
-            feature_names = available_cols
-
-        explainer = shap.TreeExplainer(lgbm_model)
-        shap_values = explainer.shap_values(X)
-
-        # Binary classification: TreeExplainer returns list [shap_class_0, shap_class_1]
-        # We want positive class (fire risk = class 1)
-        if isinstance(shap_values, list):
-            # Determine which class is positive (fire)
-            # For LightGBM binary, class 1 is typically the positive class
-            if len(shap_values) == 2:
-                shap_values_used = shap_values[1]
-                # expected_value may be scalar or array; get positive class
-                if (
-                    hasattr(explainer.expected_value, "__len__")
-                    and len(explainer.expected_value) >= 2
-                ):
-                    base_value = float(explainer.expected_value[1])
-                else:
-                    base_value = float(explainer.expected_value)
-            else:
-                # Multi-class: default to class 1 (should not happen in current model)
-                shap_values_used = shap_values[1]
-                base_value = (
-                    explainer.expected_value[1]
-                    if hasattr(explainer.expected_value, "__len__")
-                    else float(explainer.expected_value)
-                )
-        else:
-            # Regression or single-output
-            shap_values_used = shap_values
-            base_value = float(explainer.expected_value)
-
-        abs_shap = np.abs(shap_values_used[0])
-        top_indices = np.argsort(abs_shap)[-5:][::-1]
-
-        top_features = []
-        for idx in top_indices:
-            top_features.append(
-                {
-                    "feature": feature_names[idx],
-                    "shap_value": float(shap_values_used[0][idx]),
-                    "contribution": "positive" if shap_values_used[0][idx] > 0 else "negative",
-                    "importance": float(abs_shap[idx]),
-                }
-            )
-
-        return {
-            "top_features": top_features,
-            "base_value": base_value,
-        }
-    except Exception as e:
-        logger.debug(f"SHAP explanation failed: {e}")
-        return {}
+    return compute_shap_explanation(
+        features=features,
+        lgbm_model=lgbm_model,
+        feature_vector=feature_vector,
+        feature_columns=feature_columns,
+    )
 
 
 def _estimate_temporal_feature(
     col_name: str, current_val: float, month: int, doy: int
 ) -> tuple[float, float]:
+    """Estimate lag3 + roll7 for a single feature value.
+
+    Task 6.7 (UI Revamp Fase 6): body migrated to
+    :func:`src.features.single_inference.estimate_temporal_feature`. This
+    wrapper preserves the underscore alias used by :func:`_create_feature_vector`
+    (which itself delegates to ``single_inference.create_feature_vector``).
     """
-    Estimate lag3 (3 days ago) and roll7 (7-day average) values for a feature
-    given its current value. Uses deterministic heuristics derived from typical
-    temporal dynamics of meteorological and spectral variables.
+    from src.features.single_inference import estimate_temporal_feature
 
-    This replaces the previous buggy implementation that used current values for
-    both lag and roll, which caused constant predictions.
+    return estimate_temporal_feature(col_name, current_val, month, doy)
+
+
+def _create_feature_vector(
+    features: dict[str, Any],
+    use_new_features: bool = False,
+    reference_date: datetime | None = None,
+) -> np.ndarray:
+    """Create feature vector from input features.
+
+    Thin re-export of :func:`src.features.single_inference.create_feature_vector`
+    (Task 6.7). ``reference_date`` (ROADMAP §3-W1) anchors the seasonal
+    features to a caller-picked date; ``None`` falls back to "today" which
+    is the historical behaviour.
     """
+    from src.features.single_inference import create_feature_vector
 
-    # Helper for bounded clamping
-    def clamp(v, vmin=None, vmax=None, rounded=False):
-        if rounded:
-            v = int(round(v))
-        if vmin is not None:
-            v = max(vmin, v)
-        if vmax is not None:
-            v = min(vmax, v)
-        return v
-
-    # Seasonal sine/cos components to add realistic drift based on day of year
-    # Phase offset per feature to avoid all features shifting together
-    # Use deterministic hash instead of Python's salted hash for reproducibility
-    import hashlib
-
-    phase = int(hashlib.md5(col_name.encode()).hexdigest(), 16) % 365
-    seasonal = 0.1 * math.sin(2 * math.pi * (doy + phase) / 365)
-
-    # Determine feature type and apply appropriate offset
-    # Most features: lag3 = current - small drift, roll7 = current - even smaller drift
-    if col_name in ("temp_max", "dewpoint"):
-        # Temperature: can change several degrees over 3 days
-        lag_val = current_val - 2.0 + 0.5 * math.sin(2 * math.pi * doy / 365) + seasonal
-        roll_val = current_val - 0.8  # 7-day avg smoother
-    elif col_name == "precip":
-        # Precipitation: highly variable, often zero; lag could be zero or lower
-        lag_val = max(0.0, current_val * 0.3)  # assume decreasing
-        roll_val = max(0.0, current_val * 0.6)  # average includes rain events
-    elif col_name in ("wind_speed", "wind_u", "wind_v"):
-        # Wind: moderate day-to-day variation
-        lag_val = current_val * 0.95 + 0.1
-        roll_val = current_val * 0.98
-    elif col_name in ("B2", "B3", "B4", "B8", "B11", "B12"):
-        lag_val = current_val * 0.98
-        roll_val = current_val * 0.995
-    elif col_name == "ndvi":
-        lag_val = clamp(current_val * 0.98 + 0.02, 0.0, 1.0)
-        roll_val = clamp(current_val * 0.995 + 0.005, 0.0, 1.0)
-    elif col_name in ("ndwi", "nbr", "evi"):
-        lag_val = clamp(current_val * 0.98, -1.0, 1.0)
-        roll_val = clamp(current_val * 0.995, -1.0, 1.0)
-    elif col_name == "vpd":
-        lag_val = current_val + 0.2 * math.sin(2 * math.pi * doy / 365)
-        roll_val = current_val
-    elif col_name == "wind_mag":
-        lag_val = current_val * 0.96
-        roll_val = current_val * 0.99
-    elif col_name in ("dry_spell_7", "dry_spell_30"):
-        # Dry spells accumulate; lag might be slightly less
-        lag_val = max(0, int(round(current_val * 0.9)))
-        roll_val = max(0, current_val * 0.95)
-    elif col_name == "fuel_dryness":
-        lag_val = current_val * 0.98
-        roll_val = current_val * 0.99
-    elif col_name == "extreme_fire_weather":
-        lag_val = max(0, current_val - 0.2)
-        roll_val = max(0, current_val - 0.1)
-    elif col_name == "extreme_days_5d":
-        lag_val = max(0, current_val - 0.1)
-        roll_val = max(0, current_val - 0.05)
-    elif col_name == "precip_deficit_7d":
-        lag_val = current_val + 0.5
-        roll_val = current_val + 0.2
-    elif col_name in ("temp_change_3d", "wind_change_3d"):
-        # These are already differences; shrink a bit for lag
-        lag_val = current_val * 0.5
-        roll_val = current_val * 0.7
-    elif col_name in ("elevation", "land_cover", "lat", "lon", "month", "day"):
-        # Static/slowly varying: no change
-        lag_val = current_val
-        roll_val = current_val
-    else:
-        # Default: small drift
-        lag_val = current_val * 0.98 + 0.02 * math.sin(doy)
-        roll_val = current_val * 0.99
-
-    return lag_val, roll_val
-
-
-def _create_feature_vector(features: dict[str, Any], use_new_features: bool = False) -> np.ndarray:
-    """
-    Create feature vector from input features.
-
-    Args:
-        features: Input feature dictionary.
-        use_new_features: If True, use new model feature columns (79 features).
-                         If False, use legacy feature columns (59 features).
-
-    Returns:
-        Feature vector as a 2D numpy array (1, n_features).
-    """
-    # Extract required parameters from features
-    temp = features.get("temperature", 30)
-    humidity = features.get("humidity", 50)
-    wind_speed = features.get("wind_speed", 5)
-    wind_direction = features.get("wind_direction", 0)
-    rainfall = features.get("rainfall")  # Default is None (not provided)
-    # Use 1.0mm (threshold) for feature engineering if not provided - neutral assumption
-    # This ensures model receives valid numeric input without falsely triggering "dry" conditions
-    rainfall_numeric = 1.0 if rainfall is None else rainfall
-    ndvi = features.get("ndvi", 0.3)
-    vegetation_type = features.get("vegetation_type", "Savana")
-    lat = features.get("latitude", -2.0)
-    lon = features.get("longitude", 112.0)
-
-    # Elevation: use provided if available (from GEE), else default
-    elevation = features.get("elevation", 100.0)
-
-    # Land cover: use provided if available (from GEE Dynamic World), else map from vegetation
-    if "land_cover" in features:
-        land_cover = features["land_cover"]
-    else:
-        land_cover_map = {
-            "Hutan": 10,
-            "Forest": 10,
-            "Hutan Tropis Lembab": 10,
-            "Semak": 20,
-            "Shrub": 20,
-            "Semak Kering": 20,
-            "Savana": 30,
-            "Savanna": 30,
-            "Rumput": 40,
-            "Grass": 40,
-            "Padang Rumput": 40,
-            "Lahan Gambut": 40,
-            "Lahan Pertanian": 50,
-            "Agriculture": 50,
-            "Lahan Terbuka": 60,
-            "Open Land": 60,
-            "Pemukiman": 70,
-            "Settlement": 70,
-        }
-        land_cover = land_cover_map.get(vegetation_type, 30)
-
-    # Convert wind direction to u/v components
-    wind_rad = math.radians(wind_direction)
-    wind_u = -wind_speed * math.sin(wind_rad)
-    wind_v = -wind_speed * math.cos(wind_rad)
-
-    # Get current date features
-    now = datetime.now()
-    month = now.month
-    day = now.day
-    doy = now.timetuple().tm_yday
-
-    # Calculate derived meteorological features
-    # Dewpoint approximation using Magnus formula
-    a = 17.271
-    b = 237.7
-    alpha = ((a * temp) / (b + temp)) + math.log(humidity / 100.0)
-    dewpoint = (b * alpha) / (a - alpha)
-
-    # VPD (Vapor Pressure Deficit) - using proper Magnus formula
-    # Saturation vapor pressure (hPa)
-    es = 6.1078 * 10 ** ((7.5 * temp) / (237.3 + temp))
-    # Actual vapor pressure from relative humidity
-    ea = (humidity / 100.0) * es
-    vpd = max(0, es - ea)  # VPD in hPa (0-~60 hPa range, matches model training)
-
-    # Wind magnitude
-    wind_mag = math.sqrt(wind_u**2 + wind_v**2)
-
-    # Spectral bands: use GEE-provided values if available (bands in features)
-    # GEE provides surface reflectance scaled 0-1
-    # Fallback to synthetic estimation based on NDVI if not provided
-    required_bands = ["B2", "B3", "B4", "B8", "B11", "B12"]
-    if all(b in features for b in required_bands):
-        B2 = features.get("B2", 0.0)
-        B3 = features.get("B3", 0.0)
-        B4 = features.get("B4", 0.0)
-        B8 = features.get("B8", 0.0)
-        B11 = features.get("B11", 0.0)
-        B12 = features.get("B12", 0.0)
-    else:
-        # Synthetic estimation based on NDVI (fallback)
-        if ndvi > 0.6:  # Dense vegetation
-            B2, B3, B4, B8, B11, B12 = 0.03, 0.05, 0.04, 0.45, 0.08, 0.05
-        elif ndvi > 0.3:  # Moderate
-            B2, B3, B4, B8, B11, B12 = 0.05, 0.08, 0.09, 0.30, 0.15, 0.10
-        else:  # Sparse
-            B2, B3, B4, B8, B11, B12 = 0.10, 0.12, 0.15, 0.12, 0.25, 0.20
-
-    # Calculate spectral indices with safe division
-    ndwi = _safe_divide(B3 - B11, B3 + B11)
-    nbr = _safe_divide(B8 - B12, B8 + B12)
-    evi = 2.5 * _safe_divide(B8 - B4, B8 + 6 * B4 - 7.5 * B2 + 1)
-
-    # Fire weather indices
-    dry_day = 1 if rainfall is not None and rainfall < 1.0 else 0
-    dry_spell_7 = dry_day * 3  # Assume 3-day dry spell for single prediction
-    dry_spell_30 = dry_day * 3
-    fuel_dryness = vpd * (1 - ndvi)
-
-    # Threshold indicators - configurable via environment variables
-    # Using more realistic percentile-based thresholds matching training distribution
-    temp_threshold = float(os.getenv("RISK_TEMP_THRESHOLD", "32"))
-    vpd_threshold = float(os.getenv("RISK_VPD_THRESHOLD", "12"))
-    wind_threshold = float(os.getenv("RISK_WIND_THRESHOLD", "4"))
-
-    hot_threshold = 1 if temp > temp_threshold else 0
-    dry_threshold = 1 if vpd > vpd_threshold else 0
-    windy_threshold = 1 if wind_speed > wind_threshold else 0
-    extreme_fire_weather = hot_threshold + dry_threshold + windy_threshold
-
-    # Trend features (approximated for single prediction)
-    temp_change_3d = 0.0
-    wind_change_3d = 0.0
-    precip_deficit_7d = max(0, 10 - rainfall_numeric * 7)
-    extreme_days_5d = extreme_fire_weather
-
-    # Cyclical time features
-    month_sin = math.sin(2 * math.pi * month / 12)
-    month_cos = math.cos(2 * math.pi * month / 12)
-    doy_sin = math.sin(2 * math.pi * doy / 365)
-    doy_cos = math.cos(2 * math.pi * doy / 365)
-
-    # Precipitation
-    precip = rainfall_numeric
-    temp_max = temp
-
-    # Log key input features for debugging
-    logger.info(
-        f"Input features: temp={temp}, humidity={humidity}, wind_speed={wind_speed}, precip={precip}, ndvi={ndvi}"
+    return create_feature_vector(
+        features,
+        use_new_features=use_new_features,
+        reference_date=reference_date,
     )
-
-    # Build base feature dictionary
-    base_dict = {
-        "B11": B11,
-        "B12": B12,
-        "B2": B2,
-        "B3": B3,
-        "B4": B4,
-        "B8": B8,
-        "dewpoint": dewpoint,
-        "elevation": elevation,
-        "land_cover": land_cover,
-        "lat": lat,
-        "lon": lon,
-        "ndvi": ndvi,
-        "precip": precip,
-        "temp_max": temp_max,
-        "wind_speed": wind_speed,
-        "wind_u": wind_u,
-        "wind_v": wind_v,
-        "month": month,
-        "day": day,
-    }
-
-    # Calculate lag and rolling features using realistic estimators
-    lag_features = {}
-    for col, val in base_dict.items():
-        lag3_val, roll7_val = _estimate_temporal_feature(col, val, month, doy)
-        lag_features[f"{col}_lag3"] = lag3_val
-        lag_features[f"{col}_roll7"] = roll7_val
-
-    # Combine all features
-    all_features = {
-        **base_dict,
-        **lag_features,
-        "month_sin": month_sin,
-        "month_cos": month_cos,
-        "doy": doy,
-        "doy_sin": doy_sin,
-        "doy_cos": doy_cos,
-        "vpd": vpd,
-        "wind_mag": wind_mag,
-        "dry_day": dry_day,
-        "dry_spell_7": dry_spell_7,
-        "dry_spell_30": dry_spell_30,
-        "fuel_dryness": fuel_dryness,
-        "hot_threshold": hot_threshold,
-        "dry_threshold": dry_threshold,
-        "windy_threshold": windy_threshold,
-        "extreme_fire_weather": extreme_fire_weather,
-        "ndwi": ndwi,
-        "nbr": nbr,
-        "evi": evi,
-        "temp_change_3d": temp_change_3d,
-        "wind_change_3d": wind_change_3d,
-        "precip_deficit_7d": precip_deficit_7d,
-        "extreme_days_5d": extreme_days_5d,
-    }
-
-    # Load feature columns to ensure correct order
-    feature_columns = []  # Initialize before try to avoid UnboundLocalError in except handler
-    try:
-        # Use new model feature columns if requested
-        if use_new_features:
-            feature_columns = load_new_feature_columns()
-            logger.info(
-                f"Using new model features ({len(feature_columns)}): {feature_columns[:10]}..."
-            )
-        else:
-            with open(config.FEATURE_COLUMNS_PATH) as f:
-                feature_columns = json.load(f)
-            logger.info(
-                f"Using legacy features ({len(feature_columns)}): {feature_columns[:10]}..."
-            )
-
-        # Create feature vector in correct order - must match exactly
-        feature_vector = []
-        missing_features = []
-        for col in feature_columns:
-            if col in all_features:
-                feature_vector.append(all_features[col])
-            else:
-                missing_features.append(col)
-                feature_vector.append(0.0)
-
-        if missing_features:
-            logger.warning(f"Missing features (using 0.0): {missing_features}")
-
-        # CRITICAL: Feature count must match exactly
-        if len(feature_vector) != len(feature_columns):
-            raise ValueError(
-                f"Feature count mismatch: expected {len(feature_columns)}, got {len(feature_vector)}"
-            )
-
-        # Log debugging info
-        logger.debug(f"Feature vector shape: ({len(feature_vector)},)")
-        logger.debug(f"First 10 values: {feature_vector[:10]}")
-
-        return np.array([feature_vector])
-
-    except Exception as e:
-        logger.error(f"Fatal error in _create_feature_vector: {e}")
-        logger.error(f"Feature columns: {feature_columns}")
-        logger.error(f"Available features: {list(all_features.keys())}")
-        raise  # Propagate error with additional context  # Propagate error instead of returning malformed vector
 
 
 def _get_risk_level(probability: float) -> str:

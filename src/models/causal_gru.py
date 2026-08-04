@@ -254,9 +254,32 @@ def predict_causal_gru(
         X_raw_scaled = np.repeat(last_sample, seq_len, axis=0)
         n_samples = seq_len
 
-    X_seq = np.zeros((n_samples - seq_len + 1, seq_len, X_raw_scaled.shape[1]))
-    for i in range(n_samples - seq_len + 1):
-        X_seq[i] = X_raw_scaled[i : i + seq_len]
+    # Vectorised sliding-window construction (ROADMAP §2-G).
+    #
+    # The naive loop ``for i in range(...): X_seq[i] = X_raw[i:i+seq_len]``
+    # costs O(n_windows * seq_len * n_features) Python-level slice-and-copy
+    # calls — ~100 ms for a 500-cell AOI on CPU. ``sliding_window_view``
+    # creates a strided *view* of the underlying contiguous buffer instead
+    # of materialising ``n_windows`` separate slices, yielding a bitwise-
+    # identical tensor at a fraction of the cost.
+    #
+    # ``sliding_window_view(X, (seq_len, n_features))`` on a
+    # ``(n_samples, n_features)`` input returns a view of shape
+    # ``(n_samples - seq_len + 1, 1, seq_len, n_features)``; we drop the
+    # singleton feature-axis to obtain the (n_windows, seq_len, n_features)
+    # layout the GRU expects.
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    n_features = X_raw_scaled.shape[1]
+    X_seq = sliding_window_view(X_raw_scaled, (seq_len, n_features))
+    # Shape: (n_windows, 1, seq_len, n_features) -> squeeze axis 1.
+    X_seq = np.ascontiguousarray(X_seq[:, 0], dtype=np.float32)
+    n_windows = n_samples - seq_len + 1
+    # Sanity: sliding-window count must match the old Python-loop count.
+    assert X_seq.shape[0] == n_windows, (
+        f"sliding_window_view produced {X_seq.shape[0]} windows, "
+        f"expected {n_windows} (n_samples={n_samples}, seq_len={seq_len})"
+    )
 
     X_tensor = torch.tensor(X_seq, dtype=torch.float32).to(device)
 
@@ -293,8 +316,16 @@ if __name__ == "__main__":
         if len(sys.argv) > 3:
             import json
 
-            X_test = np.array([json.loads(sys.argv[3])])
-            dummy_scaler = None
+            X_test = np.array([json.loads(sys.argv[3])], dtype=float)
+            # Identity scaler (mean=0, std=1) — bug #4 historically was passing
+            # None here which caused AttributeError on scaler.transform().
+            from sklearn.preprocessing import StandardScaler
+
+            dummy_scaler = StandardScaler()
+            dummy_scaler.mean_ = np.zeros(input_dim)
+            dummy_scaler.scale_ = np.ones(input_dim)
+            dummy_scaler.var_ = np.ones(input_dim)
+            dummy_scaler.n_features_in_ = input_dim
             prob = predict_causal_gru(model, X_test, dummy_scaler, list(range(input_dim)))
             logger.info(f"Prediction shape: {prob.shape}")
             logger.info(f"Prediction: {prob[:5]}")

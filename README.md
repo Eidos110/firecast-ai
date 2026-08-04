@@ -2,14 +2,16 @@
 
 **Fire Risk Prediction System using Ensemble Machine Learning**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-orange.svg)]
 [![Docker Ready](https://img.shields.io/badge/Docker-Ready-blue.svg)](docker-compose.yml)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-teal.svg)](http://localhost:8000/docs)
-[![Streamlit](https://img.shields.io/badge/Streamlit-UI-red.svg)](http://localhost:8501)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-teal.svg)](http://localhost:7860/docs)
+[![React SPA](https://img.shields.io/badge/React-SPA_4.0-61dafb.svg)](frontend_react/)
 
-FireCast is an advanced fire forecasting and risk prediction system. It combines an ensemble of **deep learning and gradient boosting** — to estimate fire risk using meteorological, spectral, and temporal features in near real time.
+FireCast is an advanced fire forecasting and risk prediction system. It combines an **ensemble of deep learning and gradient boosting** → to estimate fire risk using meteorological, spectral, and temporal features in near real time.
+
+> **UI Stack v4.0** (Tahap E, 2026-07): the Streamlit shell has been retired and replaced by a single-page React app under `frontend_react/`. One uvicorn worker now serves **both** the FastAPI backend and the compiled SPA at `/`. See [`docs/react-spa-migration/PLAN.md`](docs/react-spa-migration/PLAN.md) for the per-stage changelog.
 
 ---
 
@@ -17,6 +19,7 @@ FireCast is an advanced fire forecasting and risk prediction system. It combines
 
 - [Features](#-features)
 - [Quick Start](#-quick-start)
+- [Architecture](#-architecture)
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [API Reference](#-api-reference)
@@ -34,53 +37,90 @@ FireCast is an advanced fire forecasting and risk prediction system. It combines
 
 | Feature | Description |
 |---|---|
-| 🔥 Fire Risk Prediction | Real-time risk scores from an ensemble and stacking model |
-| 🗺️ Interactive Map | Risk visualisation with Folium/Streamlit layers and marker sync |
-| 🌤️ Weather Integration | Live weather via OpenWeatherMap, BMKG, or demo fallback |
-| 🔎 Location Search | Two-tier geocoding: local Indonesian DB + Nominatim/OSM fallback |
-| 📊 History Analytics | Historical fire pattern analysis and trend breakdowns |
-| ⚙️ What-If Scenarios | Override sensors and parameters to model hypothetical conditions |
-| 🐳 Docker Ready | One-command start with `docker-compose up` |
-| 🔌 REST API | FastAPI backend with OpenAPI documentation at `/docs` |
+| 🔥 Fire Risk Prediction | Real-time risk scores from an ensemble + stacking model |
+| 🌍 Interactive Map (React+Leaflet) | Risk heatmap, AOI draw/edit, fire-point pulse, wind vectors |
+| 🧪 Engineer Console (V4) | 3-column layout: layers + map + diagnostic with SHAP bars + API log |
+| 🌐 i18n (id/en) | full `spa.*` translation namespace, persisted to `localStorage` |
+| 🏅 Weather Integration | Live weather via OpenWeatherMap with graceful demo fallback |
+| 🔎 Two-tier Geocoding | Local Indonesia DB (378 cities) → Nominatim/OSM fallback |
+| 📊 Analytics Trends | Per-day p10 / p50 / p90 band from the features CSV |
+| 🎯 AOI Batch Prediction | Draw a polygon → grid-sample → batch `/predict/aoi` |
+| 🐳 Docker Ready | One-command `docker-compose up` (single service, multi-stage build) |
+| 🔌 REST API | FastAPI + OpenAPI at `/docs` |
 | 💻 CLI | `python main.py` for headless inference runs |
-| 🔏 No-Keys Demo | Fully functional without a model or API keys |
-| 🗺️ AOI Analysis | Draw a polygon on the map to run batch risk predictions across the entire area |
+| 🔒 No-Keys Demo | Fully functional without a model or API keys (`ENABLE_DEMO_MODE=true`) |
 
 ---
 
 ## 🚀 Quick Start
 
-FireCast runs in a single command via the unified launcher.
+Three ways to run, all from the repo root.
+
+### Option A → Local dev (recommended for engineers)
 
 ```bash
-# 1. Set up the environment
+# 1. Backend + SPA dev server (two terminals)
 cp .env.example .env
-
-# 2. Launch the prototype
-python launch_prototype.py
+python start_api.py                         # API + SPA at :7860 (after `npm run build`)
+# Other terminal:
+cd frontend_react && npm install && npm run dev   # Vite HMR :3000, proxies API to :8000
 ```
 
-Then open **http://localhost:8501** in your browser.
-
-### Launcher Flags
+### Option B → Single-service (Hugging Face Spaces / Render / production-y)
 
 ```bash
-python launch_prototype.py --mode frontend   # UI only
-python launch_prototype.py --mode api        # API only
-python launch_prototype.py --mode both        # UI + API
-python launch_prototype.py --mode test        # Run test suite
-python launch_prototype.py --demo             # Force demo mode
-python launch_prototype.py --port 8502        # Custom UI port
+cp .env.example .env
+cd frontend_react && npm install && npm run build && cd ..
+python start_api.py                         # serves / from frontend_react/build + API
 ```
 
-### Verify Installation
+### Option C → Docker (one command, multi-stage build)
+
+```bash
+cp .env.example .env
+docker-compose up -d                         # builds React + Python, serves on :7860
+docker-compose logs -f firecast
+```
+
+### Verify services
 
 | Service | URL |
 |---|---|
-| Frontend (Streamlit) | http://localhost:8501 |
-| API Server | http://localhost:8000 |
-| API Docs (Swagger UI) | http://localhost:8000/docs |
-| Health Check | http://localhost:8000/health |
+| SPA shell | http://localhost:7860/ |
+| API Server | http://localhost:7860/predict (and all `/api/*`, `/geo/*`, `/analytics/*`, `/health`) |
+| API Docs (Swagger UI) | http://localhost:7860/docs |
+| Health Check | http://localhost:7860/health |
+| Vite dev server (Option A only) | http://localhost:3000 |
+
+---
+
+## 🏗 Architecture
+
+```
+              +--------------------------------------+
+              |            uvicorn :7860              |
+              |  (start_api.py — single worker)       |
+              +--------------------------------------+
+              |  src/geo_api.py   -> FastAPI routes   |
+              |    /predict /weather /geo /analytics  |
+              |    /api /admin /health /docs          |
+              |                                      |
+              |  src/geo_api_spa.py -> StaticFiles+SPA|
+              |    GET /          -> index.html (no cache)
+              |    GET /assets/*   -> hashed assets, 1y immutable
+              |    GET *           -> SPA fallback (history mode)
+              +--------------------------------------+
+                            ^
+                            |
+                  +---------+---------+
+                  | frontend_react/   |
+                  |  React + Vite SPA  |
+                  |  zustand + react-query + Leaflet,
+                  |  recharts, i18next (id/en)
+                  +--------------------+
+```
+
+The backend never returns 0.5 silently on model error (legacy bug #3) → it raises `PredictionError` which the API translates to HTTP 500. The SPA falls back to deterministic `mockPredict()` demo data while piping a colour-coded `err` row to the API log panel.
 
 ---
 
@@ -88,72 +128,59 @@ python launch_prototype.py --port 8502        # Custom UI port
 
 ### Prerequisites
 
-- **Python** 3.8 or higher
-- **pip** or **conda**
-- **Docker** (optional, for containerised deployment)
+- **Python 3.12** (matches training env, avoids pickle `InconsistentVersion`)
+- **Node 20** (for `frontend_react/` build; CI uses 20)
+- **Docker** (optional)
 
-### Option 1 — Using Docker (Recommended)
+### Python deps
 
 ```bash
-cp .env.example .env
-docker-compose up -d          # starts frontend + API services
-docker-compose logs -f         # view live logs
-docker-compose down            # stop all services
+# Use the pinned env to avoid libtorch/sklearn version drift:
+"E:\C.TSUBASA\miniconda\envs\FIREvCPU\python.exe" -m pip install -r requirements.txt
 ```
 
-### Option 2 — Manual Setup
+### React deps
 
 ```bash
-# Install core + optional extras
-pip install -r requirements.txt
-pip install -r requirements-frontend.txt    # UI dependencies
-pip install -r requirements-api.txt         # API dependencies
-pip install -r requirements-dev.txt         # dev & testing tools
-
-# Configure environment variables
-cp .env.example .env
-
-# Run the system
-streamlit run frontend/app.py              # UI
+cd frontend_react
+npm install
 ```
 
 ### Environment Variables
 
-| Variable | Purpose |
-|---|---|
-| `OPENWEATHER_API_KEY` | Weather data from OpenWeatherMap |
-| `BMKG_ENABLED` | Enable BMKG (Indonesian weather) provider |
-| `APP_ENV` | `development` or `production` |
-| `STREAMLIT_PORT` | Frontend port (default: `8501`) |
-| `API_PORT` | API port (default: `8000`) |
-| `ENABLE_DEMO_MODE` | Allow running without models or API keys |
-| `API_SECRET_KEY` | Secret for securing API endpoints |
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENWEATHER_API_KEY` | (none) | real weather data; demo fallback if missing |
+| `API_SECRET_KEY` | (none, rejects placeholders) | gates `/api/models/*`, `/predict/aoi`, `/admin/*` |
+| `PORT` | `7860` | uvicorn port (HF Spaces expects 7860) |
+| `HOST` | `0.0.0.0` | bind address |
+| `ENABLE_DEMO_MODE` | auto-set by `start_api.py` | `true` when model bundle missing |
+| `ALLOWED_ORIGINS` | `http://localhost:8501,3000,8000` | CSV CORS allow-list |
+| `ML_DEVICE` | `cpu` | torch device |
+
+See `.env.example` for the full list.
 
 ---
 
 ## 🎮 Usage
 
-### Frontend (Streamlit UI)
+### React SPA
 
-```bash
-streamlit run frontend/app.py
-```
+Production build lives under `frontend_react/build/`. In dev use `npm run dev` for HMR; in production `start_api.py` serves the compiled bundle from `/`.
 
-Three main tabs:
+The 3-column V4 layout (Header / Layers+Map+Filters / Diagnostic + Timeline) is composed in `frontend_react/src/App.tsx`:
 
-| Tab | Purpose |
-|---|---|
-| 🗺️ Prediksi Risiko | Map, weather, vegetation selection, prediction |
-| 📊 Analisis Historis | Historical fire statistics & time-series patterns |
-| ⚙️ Pengaturan | Model selection, risk tolerance, API keys |
+| Region | Component | Responsibility |
+|---|---|---|
+| Topbar | `Header.tsx` | brand + model/run/EPSG pills + status LED (polls `/health` 30s) |
+| Left sidebar | `LayerControlPanel.tsx`, `FiltersPanel.tsx`, `ModelSelectPanel.tsx` | 8 layer toggles + opacity, region/risk/date filters, model + Run Inference |
+| Map | `MapArea.tsx` + `InteractiveMap.tsx` + `MapOverlays.tsx` | Leaflet map, AOI draw, compass + coord readout |
+| Right diagnostic | `RightDiagnostic.tsx` | P(fire) hero, MetricGrid, ShapList, RiskTrendChart (Recharts), RawJsonPanel, ApiLogBox |
+| Bottom bar | `TimelineScrubber.tsx` | H-24 → H+72 scrubber, play/pause, export JSON |
 
 ### REST API
 
-```bash
-uvicorn src.geo_api:app --reload
-```
-
-Available under **http://localhost:8000/docs** with full Swagger documentation.
+Available under **http://localhost:7860/docs** with full Swagger documentation.
 
 ### CLI
 
@@ -161,41 +188,31 @@ Available under **http://localhost:8000/docs** with full Swagger documentation.
 python main.py --predict
 ```
 
-### Location Search
-
-FireCast includes a two-tier geocoding engine:
-
-1. **Tier 1 — Local DB**: Instant lookup for Indonesian cities (Riau, Jakarta, Bandung, Medan, …) — no internet required.
-2. **Tier 2 — Nominatim**: OpenStreetMap free API as a worldwide fallback.
-
-Search from the map tab → sidebar → *Lokasi* to auto-center the map on any location.
-
 ---
 
 ## 🧠 Model Architecture
 
-FireCast uses an **ensemble** of two complementary models whose outputs are averaged and passed through an optimised decision threshold (targeting ~80% recall for fire risk).
+FireCast uses an **ensemble / stacking** model family whose outputs are calibrated and passed through an optimised decision threshold (targeting ~80% recall for fire risk):
 
 ```
 Input Features (40+ dimensions)
-        │
-   ┌────┴────┐
-   │         │
-  CNN      LightGBM
-(1D Conv +   (Gradient
- BatchNorm)   Boosting)
-   │         │
-   └────┬────┘
-        │   ──► Weighted Average ──► Risk Score + Threshold
+        |
+   +----|------------------------+
+   |    |                        |
+  CNN   LightGBM       CausalGRU + XGBoost + Meta
+   |     |                |  |       |
+   +--|---+               +--+-------+
+      +--> calibrated average / stacking prediction
 ```
 
-### Model Components
+### Risk thresholds (single source: `frontend/themes/tokens.json`)
 
-| Component | Details |
-|---|---|
-| **CNN (1D)** | Temporal feature extraction via 1D convolutions, batch norm, dropout, and adaptive pooling |
-| **LightGBM** | Fast inference, built-in feature importance, handles mixed feature types |
-| **Ensemble** | Weighted average → calibrated threshold → probability → risk class |
+| Tier | Score range | Color |
+|---|---|---|
+| rendah (Low) | `< 0.30` | `#22c55e` |
+| sedang (Medium) | `0.30 – 0.50` | `#fb923c` |
+| tinggi (High) | `0.50 – 0.70` | `#ef4444` |
+| sangat_tinggi (Extreme) | `>= 0.70` | `#7f1d1d` |
 
 ### Feature Engineering
 
@@ -209,159 +226,132 @@ Input Features (40+ dimensions)
 
 ---
 
-## 📁 Project Structure
+## 🗂 Project Structure (post React-SPA migration)
 
 ```
 firecast/
-├── 📂 frontend/                   # Streamlit UI
-│   ├── app.py                     # Main application entry point
-│   ├── components/
-│   │   ├── map_interface.py       # Interactive map (Folium)
-│   │   ├── results_display.py     # Prediction result panel
-│   │   ├── sidebar.py             # Sidebar controls
-│   │   └── weather_display.py     # Weather card widget
-│   └── utils/
-│       ├── data_handler.py        # CSV / data loading
-│       ├── prediction_engine.py   # Feature builder + inference
-│       └── weather_api.py         # OpenWeatherMap / BMKG / demo clients
+├── src/                         # Backend
+│   ├── config.py                # dataclass config (single source of paths)
+│   ├── geo_api.py               # FastAPI app + endpoints (TAHAP B added /geo/* /analytics/* /predict/aoi)
+│   ├── geo_api_spa.py           # TAHAP E — StaticFiles mount + SPA history-mode fallback
+│   ├── predict.py               # inference + calibration
+│   ├── feature_engineering.py   # feature builder
+│   ├── api/models.py            # /api/models/* CRUD + activate endpoint
+│   ├── geo/services.py          # TAHAP B — Sandbox-safe port of frontend utils
+│   └── models/                  # cnn.py, lgbm.py, xgb.py, bigru.py, causal_gru.py
 │
-├── 📂 src/                        # Backend source
-│   ├── config.py                  # Settings & environment manager
-│   ├── predict.py                 # Prediction pipeline
-│   ├── geo_api.py                 # FastAPI routes
-│   ├── feature_engineering.py     # Feature builder
-│   ├── data_loader.py             # Dataset utilities
-│   ├── utils.py                   # Shared helpers
-│   └── models/
-│       ├── cnn.py                 # CNN model definition
-│       ├── lgbm.py                # LightGBM wrapper
-│       └── ensemble.py            # Ensemble logic + threshold
+├── frontend_react/              # TAHAP C-D-E: React SPA (single UI)
+│   ├── src/
+│   │   ├── App.tsx              # 3-area grid orchestrator
+│   │   ├── api/                 # client.ts + hooks.ts (react-query v5)
+│   │   ├── store/inferenceStore.ts # zustand store
+│   │   ├── i18n/                # i18next wired to frontend/locales/(en,id).json
+│   │   ├── theme/               # tokens.ts, risk.ts, useTheme.ts (dark/light)
+│   │   └── components/          # Header, SidebarNav, MapArea, RightDiagnostic, TimelineScrubber…
+│   ├── vite.config.ts          # base './', manualChunks (vendor-leaflet/-charts/...)
+│   └── lighthouserc.cjs         # TAHAP E — SPA perf > 70 gate
 │
-├── 📂 notebooks/                  # Jupyter notebooks
-│   ├── 01_feature_engineering.ipynb
-│   ├── 02_cnn1d_baseline.ipynb
-│   ├── 03_ensemble_cnn+lgbm.ipynb
-│   └── 04_hyperparameter_tuning.ipynb
+├── frontend/                    # only design tokens + locales + Streamlit-reference utils kept
+│   ├── themes/tokens.json       # single source of truth for colors + risk thresholds
+│   └── locales/(en,id).json     # shared i18n (SPA imports these at build time)
 │
-├── 📂 scripts/                    # Training & inference scripts
-│   ├── train.py
-│   └── inference.py
+├── tests/                       # pytest backend + TestClient API
+├── notebooks/                   # training notebooks
+├── models/                      # legacy CNN+LGBM weights
+├── add_new_model/              # stacking model artifacts (lgb/xgb/meta/causal_gru)
+├── docs/react-spa-migration/    # PLAN.md — stage-by-stage migration log
 │
-├── 📂 models/                     # Trained weights (output)
-│   ├── cnn_best.pth
-│   ├── lgbm_best.pkl
-│   ├── scaler.pkl
-│   ├── ensemble_threshold.pkl
-│   └── feature_columns.json
-│
-├── 📂 tests/                      # Unit + integration tests
-│   ├── test_config.py
-│   ├── test_prediction.py
-│   └── test_integration.py
-│
-├── 📂 .vscode/                    # VS Code workspace settings
-├── 📄 launch_prototype.py         # Unified launcher entry point
-├── 📄 main.py                     # CLI entry point
-├── 📄 pyproject.toml              # Project metadata & build config
-├── 📄 requirements.txt            # Core dependencies
-├── 📄 requirements-*.txt          # Environment-specific extras
-├── 📄 docker-compose.yml          # Docker orchestration
-├── 📄 Dockerfile                  # Container build
-├── 📄 .env.example                # Environment variable template
-├── 📄 CONTRIBUTING.md
-├── 📄 LICENSE
-└── 📄 README.md                   # This file
+├── Dockerfile                   # TAHAP E — multi-stage: Node builds React → Python serves
+├── docker-compose.yml           # TAHAP E — single-service `firecast` (api + SPA)
+├── nginx/conf.d/firecast.conf   # TAHAP E — SPA fallback for HTTPS reverse-proxy
+├── start_api.py                 # uvicorn launcher (HF Spaces + dev)
+├── Procfile                     # `web: python start_api.py`
+├── main.py                      # CLI entry point
+├── pyproject.toml               # project metadata
+├── requirements.txt             # Python deps (CPU torch, shap, lightgbm, xgboost, fastapi)
+└── README.md                    # this file
 ```
 
 ---
 
 ## 🔌 API Reference
 
-Full interactive documentation at **http://localhost:8000/docs** (Swagger UI by [FastAPI](https://fastapi.tiangolo.com/)).
+Full interactive docs at **http://localhost:7860/docs** (Swagger UI).
 
-### Health Check
+### Survey of endpoints
 
-```bash
-GET /health
-```
+| Method | Path | Status | Purpose |
+|---|---|---|---|
+| GET | `/health` | public | liveness probe |
+| POST | `/predict` | public (rate-limited) | single-cell fire risk prediction |
+| POST | `/predict/aoi` | gated `X-API-Key` | batch over a GeoJSON polygon + grid size |
+| GET | `/weather` | public | OpenWeatherMap proxy |
+| GET | `/geo/locations` | public | 378 Indonesian cities from `data/locations.json` |
+| GET | `/geo/geocode?q=` | public | Tier-1 local JSON, Tier-2 OSM Nominatim |
+| GET | `/analytics/trend?lat&lon&days=7` | public | per-day p10/p50/p90 fire-risk band |
+| GET | `/api/models/` | gated | list registered ModelVersion rows |
+| POST | `/api/models/register` | gated | register new model version |
+| POST | `/api/models/{name}/activate` | gated | activate a model version server-side |
+| POST | `/admin/cache/invalidate` | gated | drop data cache without restart |
+| GET | `/admin/db/stats` | gated | Prediction table size |
 
-**Response:**
+### Example: `/predict` body
 
 ```json
-{ "status": "ok" }
-```
-
-### Get Weather Data
-
-```bash
-GET /weather?lat=-6.2&lon=106.8
-```
-
-### Run Prediction
-
-```bash
-POST /predict
-Content-Type: application/json
-
 {
-  "temperature": 35,
-  "humidity": 40,
-  "wind_speed": 8,
+  "temperature": 30,
+  "humidity": 55,
+  "wind_speed": 6,
   "latitude": -6.2,
-  "longitude": 106.8
+  "longitude": 106.8,
+  "fuel_moisture": 20,
+  "model_type": "new"
 }
 ```
-
-| Field | Type | Required |
-|---|---|---|
-| `temperature` | `float` | ✓ |
-| `humidity` | `float` | ✓ |
-| `wind_speed` | `float` | ✓ |
-| `latitude` | `float` | ✓ |
-| `longitude` | `float` | ✓ |
 
 ---
 
 ## 🐳 Deployment
 
-### Docker Compose
+### Hugging Face Spaces (default target)
+
+1. Push the repo.
+2. The platform reads `Dockerfile` (multi-stage: Node 20 builds React → Python 3.12 serves via `start_api.py` on port 7860).
+3. Set secrets **OPENWEATHER_API_KEY** and **API_SECRET_KEY** in the Space settings.
+4. `ENABLE_DEMO_MODE` auto-enables if model files are absent → the SPA still boots with mock predictions.
+
+### Docker Compose (dev/staging)
 
 ```bash
-docker-compose up -d              # start everything
-docker-compose up -d frontend     # UI only
-docker-compose up -d api          # API only
-docker-compose logs -f            # live logs
-docker-compose down               # stop & clean up
+docker-compose up -d              # build + run single service
+docker-compose logs -f firecast
+docker-compose down
 ```
 
-### Deployment Comparison
+### HTTPS reverse-proxy (optional)
 
-| Option | Use Case |
-|---|---|
-| `streamlit run frontend/app.py` | Local development |
-| `python launch_prototype.py` | Quick local start |
-| `docker-compose up -d` | Production / staging |
-| Streamlit Cloud | Zero-config cloud hosting |
+`nginx/conf.d/firecast.conf` proxies everything to `firecast:7860`, serves immutable cache headers for `/assets/`, and falls back to `index.html` for SPA history-mode deep links. Use `docker-compose --profile production up -d`.
 
 ---
 
 ## 🛠️ Development
 
-### Running Tests
+### Run tests
+
+| Suite | Command |
+|---|---|
+| Python backend | `python -m pytest tests/ -q` (or skip Streamlit-only remaining tests with `--ignore=tests/frontend`) |
+| React SPA (vitest) | `cd frontend_react && npm test` |
+| React typescript strict | `cd frontend_react && npm run typecheck` |
+| React lint (eslint) | `cd frontend_react && npm run lint` |
+| React build | `cd frontend_react && npm run build` |
+| Lighthouse audit | `cd frontend_react && npm run lhci` |
+
+### Code quality
 
 ```bash
-pytest tests/                       # all tests
-pytest --cov=src --cov-report=html  # with coverage report
-pytest tests/test_prediction.py     # single file
-```
-
-### Code Quality
-
-```bash
-black  src/ frontend/ tests/        # format code
-isort  src/ frontend/ tests/        # sort imports
-flake8 src/ frontend/ tests/        # lint
-mypy   src/                         # type checking
+"E:\C.TSUBASA\miniconda\envs\FIREvCPU\python.exe" -m ruff check src tests      # lint
+"E:\C.TSUBASA\miniconda\envs\FIREvCPU\python.exe" -m compileall -q src          # bytecode sanity
 ```
 
 ### Contributing
@@ -378,69 +368,68 @@ Please follow [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
 ## 🔧 Troubleshooting
 
-### Models not loading — Demo Mode is active
+### Models not loading → Demo Mode is active
 
-This is expected if no trained model files exist in `models/`. FireCast will simulate predictions automatically. To train models, run the [training notebooks](notebooks/) or use `python launch_prototype.py --demo` to re-enable demo mode explicitly.
+`start_api.py` checks both `models/*.pth\.pkl` and `add_new_model/*.pkl`. If both are missing, `ENABLE_DEMO_MODE=true` is exported and the SPA returns deterministic `mockPredict()` data. Train models with the notebooks in `notebooks/` or ship prebuilt artifacts.
 
 ### `ModuleNotFoundError: No module named 'src'`
 
-```bash
-export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-# or use the launcher, which handles this automatically:
-python launch_prototype.py
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+python start_api.py
 ```
 
 ### Weather API returning errors
 
 1. Confirm `OPENWEATHER_API_KEY` is set in `.env`.
-2. FireCast falls back to synthetic weather data if the provider is unreachable.
-3. To skip weather calls entirely, test in demo mode: `python launch_prototype.py --demo`.
+2. Failure degrades to synthetic weather data (`demo_weather` key in i18n).
+3. The ApiLogBox (bottom of the diagnostic column) shows the warn/err string colour-coded.
+
+### SPA serve returns 404 at `/`
+
+You likely ran `start_api.py` without building the SPA first (`frontend_react/build/index.html` missing). The launcher logs `SPA mount skipped … (dev mode)` and serves only the API. Either:
+
+```bash
+cd frontend_react && npm run build && cd ..   # build then re-launch
+# or run the Vite dev server alongside (Option A in Quick Start)
+```
 
 ### Port already in use
 
-```bash
-# Linux / macOS
-lsof -ti:8501 | xargs kill -9
-# Windows PowerShell
+```powershell
 Stop-Process -Name python -Force -ErrorAction SilentlyContinue
-# or use a different port
-python launch_prototype.py --port 8502
-```
-
-### Map not refreshing after location change
-
-```bash
-streamlit cache clear
+python start_api.py        # PORT defaults to 7860; override via $env:PORT
 ```
 
 ---
 
-## 📊 Performance Benchmarks
+## 📊 Performance Benchmarks (post SPA migration)
 
 | Component | Metric |
 |---|---|
 | CNN Inference | ~50 ms / sample |
 | LightGBM Inference | ~10 ms / sample |
-| Ensemble Total | ~70 ms / sample |
-| API End-to-End | < 100 ms |
-| Frontend Load Time | < 3 s |
+| Stacking ensemble total | ~70 ms / sample |
+| API End-to-End (`/predict`) | < 100 ms |
+| SPA initial bundle (gzip) | index.js 37 KB + vendor-charts 151 KB + vendor-leaflet 43 KB |
+| Lighthouse Performance (SPA root) | target > 70 (LHCI gate enforces, see `lighthouserc.cjs`) |
 
 ---
 
 ## 📄 License
 
-This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
+This project is licensed under the **MIT License** → see [LICENSE](LICENSE) for details.
 
 ---
 
 ## 🙏 Acknowledgments
 
-- [OpenWeatherMap](https://openweathermap.org/) — weather data
-- BMKG (Indonesian Meteorological Agency) — supplementary weather data
-- [LightGBM](https://lightgbm.readthedocs.io/) — gradient boosting framework
-- [PyTorch](https://pytorch.org/) — deep learning framework
-- [FastAPI](https://fastapi.tiangolo.com/) — API framework
-- [Streamlit](https://streamlit.io/) — web framework
+- [OpenWeatherMap](https://openweathermap.org/) → weather data
+- BMKG (Indonesian Meteorological Agency) → supplementary weather data
+- [LightGBM](https://lightgbm.readthedocs.io/) + [XGBoost](https://xgboost.readthedocs.io/) → gradient boosting
+- [PyTorch](https://pytorch.org/) → deep learning framework
+- [FastAPI](https://fastapi.tiangolo.com/) → API framework
+- [React](https://react.dev/) + [Vite](https://vitejs.dev/) + [react-query](https://tanstack.com/query/latest) + [Leaflet](https://leafletjs.com/) → SPA stack
 
 ---
 
@@ -450,4 +439,4 @@ Questions, bug reports, or feature requests? Open an issue on the GitHub reposit
 
 ---
 
-> 🔥 **FireCast** — Protecting forests with AI.
+> 🔥 **FireCast** → Protecting forests with AI.

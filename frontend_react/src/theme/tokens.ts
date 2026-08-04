@@ -3,11 +3,10 @@
  *
  * This file is the single source of truth for the React component kit (Fase 4).
  * It is intentionally hand-aligned with tokens.json (no build step required) so
- * that the Streamlit component remains importable without a codegen pipeline.
+ * that the SPA stays importable without a codegen pipeline.
  *
  * When you edit `frontend/themes/tokens.json`, update the matching values here
- * and run `npm run typecheck` to keep the two in sync. A Vitest snapshot test
- * (`src/__tests__/tokens.snapshot.test.ts`) asserts they stay consistent.
+ * and run `npm run typecheck` to keep the two in sync.
  *
  * Risk thresholds mirror `frontend/utils/theme.py:RISK_THRESHOLDS`.
  * Risk colors mirror `frontend/utils/theme.py:RISK_COLORS`.
@@ -104,60 +103,10 @@ export function getRiskColor(scoreOrLevel: number | RiskTierLabel): string {
   return RISK_COLORS[tier] ?? '#fb923c';
 }
 
-export const DARK_PALETTE = {
-  colorPrimary: '#ef4444',
-  colorPrimaryLight: '#fca5a5',
-  colorPrimaryDark: '#b91c1c',
-  colorAccent: '#f59e0b',
-  colorSuccess: '#22c55e',
-  colorInfo: '#3b82f6',
-  colorWarning: '#eab308',
-  colorError: '#dc2626',
-  colorSurface: '#1e293b',
-  colorSurfaceHover: '#334155',
-  colorBackground: '#0f172a',
-  colorText: '#f1f5f9',
-  colorTextSecondary: '#cbd5e1',
-  colorTextMuted: '#94a3b8',
-  colorBorder: '#334155',
-} as const;
-
-export const LIGHT_PALETTE = {
-  colorPrimary: '#ef4444',
-  colorPrimaryLight: '#fca5a5',
-  colorPrimaryDark: '#b91c1c',
-  colorAccent: '#f59e0b',
-  colorSuccess: '#22c55e',
-  colorInfo: '#3b82f6',
-  colorWarning: '#eab308',
-  colorError: '#dc2626',
-  colorSurface: '#ffffff',
-  colorSurfaceHover: '#f1f5f9',
-  colorBackground: '#f8fafc',
-  colorText: '#0f172a',
-  colorTextSecondary: '#334155',
-  colorTextMuted: '#64748b',
-  colorBorder: '#e2e8f0',
-} as const;
-
-export const A11Y = {
-  focusRing: '0 0 0 3px var(--color-accent)',
-  touchTargetMin: 44,
-  contrastRatioMin: 4.5,
-} as const;
-
-export const MOTION = {
-  durationFast: '150ms',
-  durationNormal: '250ms',
-  durationSlow: '400ms',
-  easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
-} as const;
-
-export const Z_INDEX = {
-  base: 0,
-  dropdown: 100,
-  sticky: 200,
-  toast: 9000,
-  modal: 1000,
-  commandPalette: 1100,
-} as const;
+// ── Heavy theme palettes / motion tokens intentionally omitted. ─────────────
+// The React component-kit reads CSS custom properties (--color-* from
+// tokens.json inside index.css) for theming; the dark/light palettes and
+// motion/a11y constants below were never imported by any component. They
+// are kept out of the bundle to avoid drift with the CSS source of truth.
+// If you re-introduce a consumer, restore the block from git history and
+// re-check the `frontend/themes/tokens.json` contract.

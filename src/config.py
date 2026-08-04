@@ -91,6 +91,14 @@ class PathsConfig:
         return self.data_dir / "processed_firecast_features_v3.csv"
 
     @property
+    def locations_path(self) -> Path:
+        """Indonesian city registry ``{key: {name, lat, lon}}`` served by
+        ``GET /geo/locations`` (Tahap B endpoint for the React SPA sidebar
+        lookup). Kept as a single source of truth so the API and any future
+        Streamlit fallback share the same file."""
+        return self.data_dir / "locations.json"
+
+    @property
     def cnn_model_path(self) -> Path:
         return self.models_dir / "cnn_best.pth"
 
@@ -366,26 +374,31 @@ def _init_legacy_vars():
     global TRAIN_SPLIT, LAG, ROLL_WINDOW
     global CNN_DROPOUT, DEVICE, TARGET_RECALL
 
+    # NOTE: path-like legacy vars are ``pathlib.Path`` (not ``str``) because
+    # several call-sites (src/data_loader.py) invoke ``.exists()`` on them.
+    # ``Path`` is a drop-in for ``open()``, ``pandas.read_csv``,
+    # ``joblib.load`` and ``Path(...)`` arithmetic, so downstream code is
+    # unaffected. String-data vars (BASE_DIR etc.) stay ``str``.
     BASE_DIR = str(cfg.paths.base_dir)
-    DATA_PATH = str(cfg.paths.data_path)
-    MODEL_DIR = str(cfg.paths.models_dir)
-    CNN_MODEL_PATH = str(cfg.paths.cnn_model_path)
-    LGBM_MODEL_PATH = str(cfg.paths.lgbm_model_path)
-    SCALER_PATH = str(cfg.paths.scaler_path)
-    THRESHOLD_PATH = str(cfg.paths.threshold_path)
-    FEATURE_COLUMNS_PATH = str(cfg.paths.feature_columns_path)
+    DATA_PATH = cfg.paths.data_path
+    MODEL_DIR = cfg.paths.models_dir
+    CNN_MODEL_PATH = cfg.paths.cnn_model_path
+    LGBM_MODEL_PATH = cfg.paths.lgbm_model_path
+    SCALER_PATH = cfg.paths.scaler_path
+    THRESHOLD_PATH = cfg.paths.threshold_path
+    FEATURE_COLUMNS_PATH = cfg.paths.feature_columns_path
 
-    NEW_MODEL_DIR = str(cfg.paths.new_model_dir)
-    NEW_LGBM_MODEL_PATH = str(cfg.paths.new_lgbm_model_path)
-    NEW_XGB_MODEL_PATH = str(cfg.paths.new_xgb_model_path)
-    NEW_CAUSAL_GRU_MODEL_PATH = str(cfg.paths.new_causal_gru_model_path)
-    NEW_SCALER_PATH = str(cfg.paths.new_scaler_path)
-    NEW_SCALER_RAW_PATH = str(cfg.paths.new_scaler_raw_path)
-    NEW_RAW_FEATURES_PATH = str(cfg.paths.new_raw_features_path)
-    NEW_META_MODEL_PATH = str(cfg.paths.new_meta_model_path)
-    NEW_META_SCALER_PATH = str(cfg.paths.new_meta_scaler_path)
-    NEW_THRESHOLD_PATH = str(cfg.paths.new_threshold_path)
-    NEW_FEATURE_COLUMNS_PATH = str(cfg.paths.new_feature_columns_path)
+    NEW_MODEL_DIR = cfg.paths.new_model_dir
+    NEW_LGBM_MODEL_PATH = cfg.paths.new_lgbm_model_path
+    NEW_XGB_MODEL_PATH = cfg.paths.new_xgb_model_path
+    NEW_CAUSAL_GRU_MODEL_PATH = cfg.paths.new_causal_gru_model_path
+    NEW_SCALER_PATH = cfg.paths.new_scaler_path
+    NEW_SCALER_RAW_PATH = cfg.paths.new_scaler_raw_path
+    NEW_RAW_FEATURES_PATH = cfg.paths.new_raw_features_path
+    NEW_META_MODEL_PATH = cfg.paths.new_meta_model_path
+    NEW_META_SCALER_PATH = cfg.paths.new_meta_scaler_path
+    NEW_THRESHOLD_PATH = cfg.paths.new_threshold_path
+    NEW_FEATURE_COLUMNS_PATH = cfg.paths.new_feature_columns_path
 
     TRAIN_SPLIT = cfg.data.train_split
     LAG = cfg.data.lag

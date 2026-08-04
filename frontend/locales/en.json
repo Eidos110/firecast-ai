@@ -165,5 +165,228 @@
   "wind_direction": "Wind Direction",
   "wind_kmh": "km/h",
   "wind_risk": "Wind Risk Assessment",
-  "wind_speed": "Wind Speed"
+  "wind_speed": "Wind Speed",
+  "spa": {
+    "brand": "Firecast",
+    "brand_version": "v4.0",
+    "pill": {
+      "model": "model",
+      "run": "run",
+      "epsg": "EPSG",
+      "last_run": "last-run",
+      "last_run_dash": "—"
+    },
+    "status": {
+      "connecting": "connecting…",
+      "online": "online",
+      "offline": "offline",
+      "label": "Inference API"
+    },
+    "region": {
+      "label": "Region",
+      "select_label": "Active region"
+    },
+    "lang_toggle": {
+      "label": "Language"
+    },
+    "theme_toggle": {
+      "label": "Toggle theme (dark / light / auto)"
+    },
+    "user": {
+      "avatar_label": "User profile — click to set display name",
+      "prompt_name": "Display name:",
+      "initials": "FC"
+    },
+    "nav": {
+      "toggle_left": "Toggle configuration sidebar",
+      "toggle_right": "Toggle diagnostic panel"
+    },
+    "toast": {
+      "predict_success": "Prediction completed — P(fire) = {{score}}",
+      "predict_failed": "Prediction failed: {{msg}} — demo fallback shown",
+      "model_activated": "Model {{name}} v{{version}} activated",
+      "model_activate_failed": "Model activation failed: {{msg}}"
+    },
+    "palette": {
+      "label": "Command palette",
+      "placeholder": "Type a command or search…",
+      "empty": "No matching commands",
+      "toggle_layer": "Toggle layer",
+      "cycle_theme": "Cycle theme (dark / light / auto)",
+      "switch_language": "Switch language"
+    },
+    "layers": {
+      "title": "Layers",
+      "active_count": "{{active}}/{{total}} active",
+      "opacity": "Opacity",
+      "toggle": "Toggle {{label}}",
+      "layer_opacity": "Layer opacity"
+    },
+    "legend": {
+      "title": "Risk Legend",
+      "rendah": "Low",
+      "sedang": "Medium",
+      "tinggi": "High",
+      "sangat_tinggi": "Extreme"
+    },
+    "metrics": {
+      "live_metrics": "Live Metrics",
+      "api_log": "API Log",
+      "p_fire": "P(fire)",
+      "p_fire_window": "P(fire) next 24h",
+      "confidence": "Confidence",
+      "auc_roc": "AUC-ROC",
+      "drift_ks": "Drift KS",
+      "shap_explanation": "SHAP Explanation",
+      "shap_top_features_label": "Top feature importance (SHAP)",
+      "raw_json": "Raw JSON",
+      "raw_api_response": "Raw API Response",
+      "diagnostic_panel_label": "Prediction diagnostic panel"
+    },
+    "model": {
+      "label": "Model",
+      "forecast_horizon": "Forecast Horizon",
+      "confidence_threshold": "Confidence Threshold",
+      "run_inference": "Run Inference",
+      "run_inference_busy": "Running…",
+      "set_active_server": "Set active (server)",
+      "no_cell_selected": "Click the map to select a cell first",
+      "selected_cell": "Selected: {{lat}}, {{lon}}",
+      "ensemble": "Ensemble (CNN+LGBM)",
+      "stacking": "Stacking (LGB+XGB+Meta)",
+      "causal_gru": "Causal GRU",
+      "fallback": {
+        "new": "Ensemble (Stacking)",
+        "legacy": "CNN + LGBM (Legacy)"
+      }
+    },
+    "timeline": {
+      "label": "Forecast horizon scrubber",
+      "now": "Now",
+      "play": "Play",
+      "pause": "Pause",
+      "new_run": "New run id",
+      "export_json": "Export run JSON"
+    },
+    "filters": {
+      "risk_level": "Risk Level",
+      "region": "Region",
+      "date_range": "Date Range",
+      "start_date": "Start date",
+      "end_date": "End date",
+      "loading_locations": "Loading locations…",
+      "region_count": "{{count}} region entries",
+      "locations_unavailable": "Locations unavailable — fallback list shown",
+      "region_all": "All Indonesia",
+      "risk_level_options": {
+        "all": "All",
+        "ge_moderate": "≥ Moderate",
+        "ge_high": "≥ High",
+        "extreme_only": "Extreme only"
+      }
+    },
+    "map": {
+      "aria_label": "Map pane",
+      "aria_label_interactive": "FireCast Interactive Map",
+      "error": {
+        "heading": "Map Error",
+        "reload_button": "Reload"
+      },
+      "compass": {
+        "north": "N",
+        "label": "Compass"
+      },
+      "coord_readout": {
+        "label": "Coordinates",
+        "epsg": "EPSG:{{code}}",
+        "no_cell": "no cell selected"
+      },
+      "zoom": {
+        "label": "Zoom level"
+      },
+      "aoi": {
+        "drawn": "AOI drawn ({{n}} points)",
+        "updated": "AOI updated ({{n}} points)",
+        "deleted": "AOI cleared",
+        "draw_tip": "Draw a polygon on the map to run batch prediction",
+        "log_drawn": "AOI drawn — ready for batch predict",
+        "log_updated": "AOI edited",
+        "log_deleted": "AOI deleted",
+        "progress_label": "Predicting AOI batch…"
+      },
+      "tile": {
+        "ready": "Map tiles loaded",
+        "failing": "Tile load failing",
+        "fallback": "Tile provider switched: {{from}} → {{to}}",
+        "all_failed": "All map tile providers failed (check network/CORS).",
+        "reload": "Reload"
+      },
+      "toast": {
+        "aoi_drawn": "AOI drawn — {{n}} points. Run batch prediction from the sidebar.",
+        "aoi_updated": "AOI updated",
+        "aoi_deleted": "AOI cleared"
+      },
+      "measurement": {
+        "total_km": "Distance: {{km}} km"
+      }
+    },
+    "trend": {
+      "chart_label": "7-day fire-risk trend",
+      "loading": "fetching trend…",
+      "axis_p10": "p10 band",
+      "axis_p50": "median (p50)",
+      "axis_p90": "p90 band",
+      "threshold_label": "thr",
+      "tooltip_p_fire": "P(fire) = {{value}} ({{tier}})",
+      "tooltip_ci": "CI: {{p10}} – {{p90}}"
+    },
+    "api_log": {
+      "empty": "API log is empty",
+      "aria_label": "API log",
+      "no_inference_run": "No inference run yet. Click map → Run Inference.",
+      "level_ok": "OK",
+      "level_warn": "WARN",
+      "level_err": "ERR",
+      "ok": "ok",
+      "warn": "warn",
+      "err": "err",
+      "demo": "demo"
+    },
+    "api_key": {
+      "title": "API Key",
+      "label": "X-API-Key",
+      "placeholder": "paste server secret here",
+      "save": "Save",
+      "saved": "Saved",
+      "clear": "Clear",
+      "reveal": "Reveal key",
+      "hide": "Hide key",
+      "status_set": "Key set — gated endpoints unlocked.",
+      "status_unset": "No key set — /predict and /api/models/* will return 401.",
+      "log_saved": "API key saved — gated endpoints unlocked.",
+      "log_cleared": "API key cleared — gated endpoints will now 401.",
+      "log_empty": "Cannot save an empty API key."
+    },
+    "error_boundary": {
+      "heading": "Something went wrong",
+      "description": "An unexpected error occurred. Please try refreshing the page.",
+      "reload": "Reload Page"
+    },
+    "error": {
+      "unauthorized": "Unauthorized: check API key",
+      "validation": "Validation error: the request body was rejected (422)",
+      "not_found": "Resource not found (404)",
+      "rate_limited": "Rate limit exceeded — slow down",
+      "server": "Server error — check backend logs"
+    },
+    "mode": {
+      "label": "Persona mode",
+      "engineer": "Engineer",
+      "analyst": "Analyst",
+      "demo": "Demo",
+      "engineer_hint": "Full engineer console — SHAP, raw JSON, command palette",
+      "analyst_hint": "Analyst console — table-first, CSV download, no dev tools",
+      "demo_hint": "Demo walkthrough — read-only, hidden API keys & model select"
+    }
+  }
 }

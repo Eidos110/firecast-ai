@@ -24,6 +24,11 @@ import {
   type RiskTierLabel,
 } from './tokens';
 
+// Re-export the tier label type so consumers can import it from either
+// `../theme/risk` or `../theme/tokens` (back-compat with the legacy
+// Streamlit component bridge).
+export type { RiskTierLabel };
+
 export type RiskLevel = RiskTierLabel;
 
 // Re-export the canonical thresholds typed as a plain object (still `as const`).

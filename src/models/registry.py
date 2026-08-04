@@ -14,7 +14,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Import ModelVersion from database to avoid duplicate class definitions
-from src import config  # noqa: E402
 from src.database import ModelVersion  # noqa: E402
 
 
@@ -93,14 +92,17 @@ def get_model_path(model_name: str, version: str | None = None) -> str | None:
             # ``add_new_model/`` would otherwise be silently inaccessible here.
             if result:
                 try:
-                    cfg = config.get_config()
-                    allowed_roots = [
-                        Path(cfg.paths.models_dir).resolve(),
-                        Path(cfg.paths.new_model_dir).resolve(),
-                    ]
+                    # Single-source whitelist via src.utils.path_safety
+                    # (Audit rekomendasi "add_new_model/ whitelist" rapikan).
+                    from src.utils.path_safety import (
+                        allowed_model_roots,
+                        is_path_within_allowed_roots,
+                    )
+
+                    allowed_roots = allowed_model_roots()
                     file_path_resolved = Path(result).resolve()
                     # Ensure the resolved path is within at least one root.
-                    if any(_safe_relative_to(file_path_resolved, root) for root in allowed_roots):
+                    if is_path_within_allowed_roots(file_path_resolved, allowed_roots):
                         return str(file_path_resolved)
                     logger.error(
                         f"Path traversal detected (or path outside whitelist): "

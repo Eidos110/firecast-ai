@@ -1,16 +1,13 @@
 /* eslint-disable */
 /**
- * Tailwind config for the FireCast React component kit (Fase 4).
+ * Tailwind config for the FireCast React SPA (v4 — Engineer Console layout).
  *
  * Reads design tokens from `../frontend/themes/tokens.json` so that Tailwind
  * utility classes & arbitrary references stay in sync with the single source
- * of truth shared by the Streamlit shell (Python `theme.py`) and the React
- * shell (`theme/tokens.ts`).
+ * of truth shared by the legacy Streamlit theme.py and the React theme/tokens.ts.
  *
- * The PostCSS plugin is NOT required to be installed for the existing Streamlit
- * component build (Vite drops it); this file is a ready-to-use scaffold for
- * projects that bring in tailwindcss. If `tailwindcss` is installed, you can run
- * `npx tailwind -c tailwind.config.cjs -i src/index.css -o dist/tw.css --minify`.
+ * The PostCSS plugin (postcss.config.cjs) wired here enables both dark and light
+ * variants; the `content` glob covers all ts/tsx under src/.
  */
 const tokens = require('../frontend/themes/tokens.json');
 
@@ -43,11 +40,10 @@ function nested(sectionName) {
   return out;
 }
 
-const riskColors = section('color')?.risk || {};
-const riskBgColors = section('color')?.risk_bg || {};
-const dark = section('color')?.dark || {};
-const light = section('color')?.light || {};
-const base = section('color')?.base || {};
+const riskColors = section('color').risk || {};
+const riskBgColors = section('color').risk_bg || {};
+const dark = section('color').dark || {};
+const base = section('color').base || {};
 const spacing = section('spacing');
 const radius = section('radius');
 const shadow = section('shadow');
@@ -59,7 +55,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Brand + accessibility palette (mirrors `theme.PALETTE`).
+        // Brand + accessibility palette (mirrors theme.PALETTE).
         primary: val(base.primary),
         'primary-light': val(base.primary_light),
         'primary-dark': val(base.primary_dark),
@@ -68,7 +64,8 @@ module.exports = {
         info: val(base.info),
         warning: val(base.warning),
         error: val(base.error),
-        // Risk tier colours — pull from `risk` section so the map keeps "rendah/sedang/..." semantics.
+        // Risk tier colours — Indonesian-tier semantics kept to match the backend
+        // response payload (`risk_level` returns rendah/sedang/tinggi/sangat_tinggi).
         'risk-rendah': riskColors.rendah,
         'risk-sedang': riskColors.sedang,
         'risk-tinggi': riskColors.tinggi,
