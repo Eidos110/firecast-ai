@@ -87,7 +87,7 @@ frontend/                 → hanya design tokens + locales (single-source) + ut
 add_new_model/         → model stacking baru (lgb/xgb/meta/causal_gru) + raw_features.json
 models/                → model legacy (CNN+LGBM) + scaler + threshold
 data/                  → CSV feature dataset + cache hex JSON + locations.json (378 kota ID)
-notebooks/             → 4 notebook pelatihan
+notebooks/             → 3 notebook pelatihan (02/03/04; notebook-01 stub pensiun 2026-08-04 — lihat §5-F)
 tests/                 → test_api_geo (TestClient), test_config, test_prediction, test_integration
 docs/react-spa-migration/PLAN.md → log per-tahap migrasi (A..E)
 nginx/conf.d/firecast.conf → TAHAP E: SPA history-mode reverse-proxy (HTTPS optional profile)
