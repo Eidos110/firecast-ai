@@ -52,7 +52,7 @@
 
 ## §2. Track A — Backend & Infrastruktur
 
-### A. Migrasi FastAPI lifespan ⬜
+### A. Migrasi FastAPI lifespan  ✅
 - **Kenapa**: `@app.on_event("startup")` deprecated di FastAPI 0.110+; DeprecationWarning berisik di test log; future release akan remove.
 - **Apa**:
   1. Buat `asynccontextmanager` di `src/geo_api.py` (atau baru `src/lifespan.py`) yang yield startup init.
@@ -61,7 +61,7 @@
 - **Verifikasi**: `pytest tests/ -q` (harus 170 passed, tanpa warning `on_event is deprecated`).
 - **Effort**: 30 min.
 
-### B. Kredensial GEE di `.env.example` ⬜
+### B. Kredensial GEE di `.env.example` ✅
 - **Kenapa**: File example tidak boleh menyimpan nilai real (risk kebocoran service-account JSON).
 - **Apa**:
   1. Ganti `GOOGLE_APPLICATION_CREDENTIALS=...firecast-001-db06a187f9f4.json` → `./secrets/your-gee-key.json`.
@@ -70,13 +70,13 @@
 - **Verifikasi**: `git status` — tidak ada file di `secrets/` ter-track.
 - **Effort**: 10 min.
 
-### C. Notebook cleanup ⬜
+### C. Notebook cleanup  ✅
 - **Kenapa**: `add_new_model/final_modelling_V4.1_GeminiPRO.ipynb` akan crash saat exec ulang — `LogisticRegressionCV` tidak diimport, `json/joblib` didefinisikan ulang.
 - **Apa**: Di cell import (cell 1) tambah `from sklearn.linear_model import LogisticRegressionCV`; hapus re-import `json`, `joblib` di cell 8.
 - **Verifikasi**: Manual exec notebook → cell "Logistic Regression dengan cross-validation internal" tidak NameError.
 - **Effort**: 5 min.
 
-### D. Split `src/predict.py` ⬜
+### D. Split `src/predict.py` ✅
 - **Kenapa**: 1779 baris terlalu panjang; calibration & SHAP sudah dipindah tapi feature-acking single-inference masih tercampur.
 - **Apa** (map ke struktur target):
   - `src/features/single_inference.py` — `_create_feature_vector`, `_estimate_temporal_feature`.
@@ -85,7 +85,7 @@
 - **Verifikasi**: `pytest tests/ -q` (170 passed tetap; baru tambah `tests/test_single_inference.py` unit untuk `_estimate_temporal_feature` extreme months).
 - **Effort**: 3–4 jam.
 
-### E. Integration test MapArea AOI ⬜
+### E. Integration test MapArea AOI ✅
 - **Kenapa**: Alur draw polygon → `/predict/aoi` → store overlay tidak punya test; regression sangat mahal (user akan batch-predict polygon kosong tanpa sadar).
 - **Apa**:
   1. Mock `leaflet-draw` `draw:created` event di `MapArea.test.tsx` (jika belum ada).
@@ -94,7 +94,7 @@
 - **Verifikasi**: `npm test -- MapArea` lulus.
 - **Effort**: 2 jam.
 
-### F. Vektorisasi `_h3_index_vectorized` ⬜
+### F. Vektorisasi `_h3_index_vectorized` ✅
 - **Kenapa**: Saat ini list-comprehension Python; untuk AOI >100 titik lambat.
 - **Apa**: Dalam `src/geo_api.py`:
   1. Convert ke NumPy: `latlon = np.column_stack([lats, lons])`.
@@ -103,7 +103,7 @@
 - **Verifikasi**: `pytest tests/test_h3_vectorized.py` + benchmark before/after (AOI 500 titik: target <50ms).
 - **Effort**: 1 jam.
 
-### G. Sliding-window `predict_causal_gru` ⬜
+### G. Sliding-window `predict_causal_gru` ✅
 - **Kenapa**: Python loop membentuk `seq_len` sequences → overhead ~100ms untuk 500 titik.
 - **Apa**: Ganti loop dengan:
   ```python
@@ -113,7 +113,7 @@
 - **Verifikasi**: `predict_causal_gru` output bitwise-identik sebelum/sesudah; benchmark AOI 500 titik turun ≥80%.
 - **Effort**: 30 min.
 
-### H. orjson response ⬜
+### H. orjson response  ✅
 - **Kenapa**: `/predict` mengembalikan array prob + SHAP; orjson 2–3× lebih cepat dari `JSONResponse`.
 - **Apa**: 
   1. Tambah `orjson` ke `requirements.txt` dan `pyproject.toml`.
@@ -121,7 +121,7 @@
 - **Verifikasi**: `pytest tests/test_api_geo.py -q` lulus; benchmark `/predict` p99 latency turun ≥30%.
 - **Effort**: 15 min.
 
-### I. Parquet migration ⬜
+### I. Parquet migration  ✅
 - **Kenapa**: `firecast_data_readymodelling_final_V3.csv` besar (>100MB estimasi); Parquet 5–10× lebih kecil + dibaca `pd.read_parquet` jauh lebih cepat.
 - **Apa**:
   1. Buat `scripts/migrate_to_parquet.py` (baca CSV → tulis `.parquet`).
@@ -131,7 +131,7 @@
 - **Dependensi**: none.
 - **Effort**: 2 jam.
 
-### J. Cache disk `/analytics/trend` ⬜
+### J. Cache disk `/analytics/trend` ✅
 - **Kenapa**: Trend dihitung ulang dari CSV tiap request ~50–100ms. Engineer toggle tanggal berulang kali terasa.
 - **Apa**: Di `src/geo/services.py`:
   ```python
@@ -144,7 +144,7 @@
 - **Verifikasi**: `pytest tests/test_api_geo.py -q` lulus; second call ~5ms.
 - **Effort**: 45 min.
 
-### K. GitHub Actions CI ⬜
+### K. GitHub Actions CI  ✅
 - **Kenapa**: Saat ini `.github/workflows/ci.yml` ada tapi tidak diketahui cover apa. Pastikan minimal:
   1. `ruff check .` pass
   2. `pytest tests/ -q` pass (skip hanya jika file `.ipynb` yang berubah)
@@ -158,7 +158,7 @@
 
 ## §3. Track B — UI/UX
 
-### L. Skeleton loading metric cards ⬜
+### L. Skeleton loading metric cards ✅
 - **Kenapa**: `/predict` bisa 200–500ms; panel kanan kosong → user tidak tahu sistem bekerja.
 - **Apa**:
   1. `RightDiagnostic` baca `usePredict().isPending` dari hook; render `<Skeleton height={N}/>` saat pending.
@@ -167,7 +167,7 @@
 - **Dependensi**: none. Bisa dilakukan paralel dengan H.
 - **Effort**: 1 jam.
 
-### M. Error i18n di ApiLogBox ⬜
+### M. Error i18n di ApiLogBox ✅
 - **Kenapa**: Pesan mentah "422 field required" tidak user-friendly.
 - **Apa**: Mapping di `ApiLogBox`:
   ```ts
@@ -181,7 +181,7 @@
 - **Verifikasi**: Test baru `ApiLogBox.test.tsx` — entry `{level:'err', message:'422 ...'}` → render "Validation error" (en) / "Error validasi" (id).
 - **Effort**: 45 min.
 
-### W1. Geospatial depth boost ⬜
+### W1. Geospatial depth boost ✅
 - **Kenapa**: Standard internasional (Planet Explorer, EO Browser) punya 2 fitur kunci yang hilang.
 - **Apa**:
   1. **Time-series scrub di peta**: tambah tanggal selector di Header (dari TimelineScrubber global) → `/predict` dipanggil untuk tanggal terpilih → heatmap update.
@@ -191,7 +191,7 @@
   - Test `Timeline.integration.test.tsx`: pilih tanggal → query `/predict?ts=...` dipanggil dengan ts benar.
 - **Effort**: 3 jam.
 
-### W2. Clarity polish ⬜
+### W2. Clarity polish  ✅
 - **Kenapa**: Detail micro-interaction standard.
 - **Apa**:
   1. `RiskTrendChart` — pasang Recharts `<Tooltip content={<Custom/>}/>` yang tampilkan "P(fire)=0.72 (High), CI: 0.61–0.83".
@@ -201,7 +201,7 @@
   - `predictAoi` isPending=true → `queryByTestId('aoi-progress')` ada.
 - **Effort**: 2 jam.
 
-### W3. Mode tabs ⬜
+### W3. Mode tabs  ✅
 - **Kenapa**: Untuk demo non-technical dan analyst data science (bedakan persona).
 - **Apa**: Tambah tab di Header (kiri brand):
   ```
@@ -215,7 +215,7 @@
 - **Dependensi**: I (Parquet) — agar `Download CSV` cepat bila dataset besar.
 - **Effort**: 3 jam.
 
-### W4. A11y + utility ⬜
+### W4. A11y + utility ✅
 - **Kenapa**: Contrast text-muted di dark mode 4.5:1 (WCAG AA) — target AAA 7:1 untuk standard global.
 - **Apa**:
   1. Update CSS dark `--color-text-muted: #94a3b8 → #b2bed6` (uji dengan `pagina.io/color-contrast-checker` atau bawaan browser DevTools).
@@ -312,3 +312,10 @@ Untuk fokus, item berikut **ditolak** sampai ada data usage yang membuktikan per
   - **Demo-ready signoff** (production depeloyasi path): `mount_spa(app, frontend_react/build)` → `True`; TestClient call `/health` 200; `/` 200 text/html (ada `<div id="root">`); `/deep/route?x=1` 200 (SPA history-mode fallback); `/assets/vendor-react.js` 200 + header `cache-control: public, max-age=31536000, immutable`. Boot-to-3-responses = 233 ms.
   - **Lighthouse re-audit** (closure §4 W5 Track B): lighthouse CLI langsung (bypass `chrome-launcher` cleanup yang crash di Windows/EPERM file-lock) menghasilkan **perf 74 / a11y 96 / best-practices 96 / SEO 91**. Semua gate ROADMAP §3-W4 & `lighthouserc.cjs` PASS (perf ≥70, a11y ≥85, BP ≥85 warn, SEO ≥80 warn). Artifact tidak ditulis karena crash terjadi pre-upload, tetapi score valid karena proses audit berhasil sebelum cleanup gagal.
   - **Final gates**: backend `pytest` **187 passed**, ruff gate-scope **All checks passed**, frontend `vitest` **57/57**.
+- 2026-08-04 PM⁵ — **Doc-consistency**: 17 heading detail §2 (A–K) & §3 (L, M, W1–W4) masih berlabel ⬜ walau §1 tabel & §7 log sudah ✅. Sinkronkan via regex `### <name> ... ⬜ → ✅` tanpa mengubah legend (line 7). Internal-consistency sekarang benar; engineer baru membaca detail section tidak lagi salah mengira item belum dikerjakan.
+
+> **Roadmap closure statement (2026-08-04)**: Seluruh item di §1 tabel (17/17)
+> sudah ✅, seluruh heading §2+§3 sekarang ✅, dan §4 timeline W1..W5 sudah
+> ditutup. Tidak ada pekerjaan roadmap tersisa. Fase "lanjutkan" selanjutnya
+> di luar dokumen ini adalah: push branch ke remote (ci.yml trigger) + PR ke
+> master — keduanya di luar scope roadmap & butuh keputusan eksplisit.
