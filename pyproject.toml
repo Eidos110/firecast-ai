@@ -25,6 +25,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -50,11 +51,6 @@ dependencies = [
     "shapely>=2.0.0",
     "geopandas>=0.14.0",
     "h3>=3.7.6",
-    # Frontend
-    "streamlit>=1.28.0",
-    "folium>=0.14.0",
-    "streamlit-folium>=0.15.0",
-    "plotly>=5.15.0",
     "pillow>=10.0.0",
     "sqlmodel>=0.0.14",
     "earthengine-api>=0.1.371",
@@ -92,11 +88,18 @@ Issues = "https://github.com/yourusername/firecast/issues"
 firecast = "main:main"
 
 [tool.setuptools]
-packages = ["src", "src.models", "src.api", "src.utils", "src.features"]
+packages = [
+    "src",
+    "src.api",
+    "src.features",
+    "src.geo",
+    "src.models",
+    "src.utils",
+]
 
 [tool.black]
 line-length = 100
-target-version = ["py38", "py39", "py310", "py311"]
+target-version = ["py310", "py311", "py312"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -118,7 +121,7 @@ line_length = 100
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["notebooks", "firecast-private", "tmp-space-deploy", "frontend_react/build", "frontend_react/node_modules"]
 
 [tool.ruff.lint]
@@ -135,5 +138,54 @@ ignore = [
 "src/config.py" = ["E402"]    # late imports intentional (lazy torch guard)
 "src/predict.py" = ["F821", "E402"]   # module-globals lazy registration pattern; late import
 "src/models/causal_gru.py" = ["F821"]  # __main__ defines class lazily
-"src/models/registry.py" = ["F821", "E402", "E712"]  # lazy defs; bool column comparison
+"src/models/registry.py" = ["E402", "E712"]  # late imports + bool column comparison (the F821 NameError was fixed by src/utils/path_safety.py)
+
+# =============================================================================
+# pytest markers & coverage configuration.
+# =============================================================================
+# ``integration`` marks the FastAPI TestClient end-to-end smoke; there is no
+# Streamlit surface left post-migration, so no ``frontend``/``slow`` markers
+# are needed any more. Coverage is configured via [tool.coverage.run] and the
+# CLI args in ci.yml — we do NOT bake ``--cov-fail-under`` into addopts so
+# local ``pytest tests/`` stays developer-friendly. The CI gate asserts the
+# bar instead.
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --tb=short"
+markers = [
+    "integration: cross-module end-to-end smoke (FastAPI TestClient + src pipeline)",
+]
+filterwarnings = [
+    # Pre-existing sklearn/xgboost pickle version-mismatch warnings (AGENTS.md
+    # §5.B) — noise in CI logs, not actionable for the UI revamp tests.
+    "ignore::UserWarning:sklearn.exceptions.InconsistentVersionWarning",
+    "ignore::UserWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src", "frontend/utils"]
+omit = [
+    "*/__main__.py",
+    "*/tests/*",
+    "*/node_modules/*",
+    "*/frontend_react/*",
+    "*/_preview_ui/*",
+]
+
+[tool.coverage.report]
+# ``fail_under`` is the global floor that guards src against erosion; the
+# dedicated CI step (ci.yml job ``python``) owns the per-package bar.
+# Local developers who want a stricter gate can run e.g.:
+#   pytest --cov=src --cov-fail-under=60 tests/
+fail_under = 40
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if __typing.TYPE_CHECKING:",
+]
 

@@ -54,8 +54,13 @@ def predict_xgb(
 
     Returns:
         Array of predictions (probability of class 1 if use_proba=True)
+
+    Raises:
+        RuntimeError: If prediction fails. We intentionally DO NOT return a
+            silent 0.5 fallback — a bogus "Medium" risk label could mask a
+            real fire danger (AGENTS.md §3 "Penanganan model ML"). Callers
+            (predict.py) wrap this as PredictionError → HTTP 500.
     """
-    n = X.shape[0] if hasattr(X, "shape") else len(X)
     try:
         if use_proba:
             # predict_proba first — works for XGBClassifier/xgb.XGBModel (sklearn ≥ 2)
@@ -76,8 +81,8 @@ def predict_xgb(
         return model.predict(X)
 
     except Exception as e:
-        logger.warning(f"XGBoost prediction error: {e}. Using neutral 0.5 fallback.")
-        return np.full(n, 0.5, dtype=float)
+        logger.error("XGBoost prediction failed: %s", e, exc_info=True)
+        raise RuntimeError(f"XGBoost prediction failed: {e}") from e
 
 
 if __name__ == "__main__":

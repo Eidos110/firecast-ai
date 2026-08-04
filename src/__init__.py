@@ -1,9 +1,11 @@
 """
-FireCast – South Foreplay system
-Ensemble: CNN + LightGBM for fire risk prediction
+FireCast — Fire risk prediction system.
+
+Stacking ensemble (LightGBM + XGBoost + meta-learner) with a legacy
+CNN + LightGBM fallback, served via FastAPI + a React SPA.
 """
 
-__version__ = "1.0.0"
+__version__ = "4.0.0"
 __author__ = "FireCast Team"
 
 # Lazy safe imports at module level

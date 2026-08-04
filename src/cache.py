@@ -16,7 +16,6 @@ This module MUST be import-safe without optional dependencies:
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 from typing import Any
 
@@ -183,7 +182,3 @@ __all__ = [
     "cache_stats",
     "cached",
 ]
-
-# Silence "imported but unused" for ``math`` import guard in linters that
-# scan this module without the optional tools installed.
-_ = math

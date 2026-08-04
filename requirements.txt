@@ -16,6 +16,10 @@
 #        a fixed shap wheel (>=0.47) is released.
 numpy>=1.26,<2
 pandas>=2.0.3
+# Parquet read/write (ROADMAP §2-I): used by src/data_loader._read_tabular
+# to prefer the .parquet twin when present. Snappy compression keeps file
+# 3-4x smaller than CSV. Required for the migration path to work.
+pyarrow>=14.0.0
 scikit-learn>=1.9.0
 
 # =============================================================================
@@ -100,6 +104,17 @@ passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
 apscheduler>=3.10.4
 slowapi>=0.1.9
+
+# =============================================================================
+# Observability (Audit rekomendasi "Sentry/OpenTelemetry") — optional
+# =============================================================================
+# Both libs are imported lazily inside src/observability.py. Absence is fine:
+# capture_exception add_breadcrumb & span degrade to no-op. Install these
+# only when you have a Sentry DSN / OTLP endpoint to wire them up.
+sentry-sdk[fastapi]>=1.40.0  # optional; init via SENTRY_DSN env
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp-proto-http>=1.24.0
 
 # =============================================================================
 # Development (excluded from deployment)

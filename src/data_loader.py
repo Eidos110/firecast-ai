@@ -1,10 +1,52 @@
+"""Data loading helpers (ROADMAP §2-I — Parquet-first).
+
+The preprocessing pipeline produces two artefact formats in `data/`:
+  - ``*.csv`` — human-readable, but slow to ingest (text parsing + type
+    inference per column), particularly bad on the 100 MB+ processed
+    features file used by ``/predict``.
+  - ``*.parquet`` — columnar, schema-preserved, snappy-compressed.
+    ``pd.read_parquet`` is 5–10× faster and uses less peak RAM than CSV.
+
+Resolution rule: prefer Parquet **iff** the same-stem `.parquet` file
+sits next to the requested `.csv`. Falls back to CSV silently so legacy
+deployments that have not run ``scripts/migrate_to_parquet.py`` keep
+working without any code path change.
+"""
 import json
+from pathlib import Path
 
 import joblib
 import pandas as pd
 
 from src import config
 from src.feature_engineering import engineer_features
+
+
+def _resolve_tabular(path: Path) -> Path:
+    """Return the ``.parquet`` twin if it exists, else the original path.
+
+    The lookup is intentionally stale-cache-free: we hit the filesystem on
+    every call so an operator can drop in a rebuilt Parquet file and have it
+    picked up on the next request without a worker restart. The cost of a
+    single ``Path.exists`` stat is trivial next to a CSV parse.
+    """
+    if path.suffix == ".csv":
+        parquet_twin = path.with_suffix(".parquet")
+        if parquet_twin.exists():
+            return parquet_twin
+    return path
+
+
+def _read_tabular(path: Path) -> pd.DataFrame:
+    """Load CSV or Parquet transparently based on the resolved suffix."""
+    resolved = _resolve_tabular(path)
+    if resolved.suffix == ".parquet":
+        # ``columns=None`` keeps full column set; pyarrow's Parquet reader
+        # preserves dtypes (category, timestamp, …) so downstream code
+        # doesn't need to re-cast. Requires ``pyarrow`` (already in
+        # requirements.txt).
+        return pd.read_parquet(resolved)
+    return pd.read_csv(resolved)
 
 
 def load_data_for_evaluation():
@@ -18,7 +60,7 @@ def load_data_for_evaluation():
         raise FileNotFoundError(
             f"Data file not found at {config.DATA_PATH}. " "Check your DATA_PATH configuration."
         )
-    df = pd.read_csv(config.DATA_PATH)
+    df = _read_tabular(config.DATA_PATH)
 
     if not config.FEATURE_COLUMNS_PATH.exists():
         raise FileNotFoundError(

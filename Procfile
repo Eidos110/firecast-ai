@@ -1,1 +1,1 @@
-web: python3 start_api.py
+web: python start_api.py
