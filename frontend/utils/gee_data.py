@@ -18,11 +18,35 @@ logger = logging.getLogger(__name__)
 
 # Service account credentials
 SERVICE_ACCOUNT = "popaye@firecast-001.iam.gserviceaccount.com"
-KEY_FILE = Path(__file__).parent.parent.parent / "add_new_model" / "firecast-001-db06a187f9f4.json"
+
+# Resolve GEE key path WITHOUT hardcoding a specific (leaked) key id:
+#   1. $GOOGLE_APPLICATION_CREDENTIALS (env) — recommended, points to
+#      secrets/firecast-001-<key_id>.json (never commit the key itself).
+#   2. fallback: first secrets/firecast-001-*.json on disk.
+# The old key (firecast-001-db06a187f9f4.json) was publicly exposed on the
+# HF Space and has been revoked (invalid_grant) — do not reintroduce it.
+_GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+
+
+def _resolve_key_file() -> Optional[Path]:
+    if _GOOGLE_APPLICATION_CREDENTIALS:
+        p = Path(_GOOGLE_APPLICATION_CREDENTIALS)
+        if p.exists():
+            return p
+        logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS set but not found: {p}")
+    secrets_dir = Path(__file__).parent.parent.parent / "secrets"
+    if secrets_dir.is_dir():
+        matches = sorted(secrets_dir.glob("firecast-001-*.json"))
+        if matches:
+            return matches[0]
+    return None
+
+
+KEY_FILE = _resolve_key_file()
 
 # Initialize GEE on module import (one-time)
 try:
-    if not KEY_FILE.exists():
+    if KEY_FILE is None or not KEY_FILE.exists():
         logger.warning(f"GEE key file not found: {KEY_FILE}")
         _gee_initialized = False
     else:
