@@ -77,16 +77,12 @@ tqdm>=4.66.1
 requests>=2.31.0
 
 # =============================================================================
-# Frontend (Streamlit) Dependencies
+# Runtime services (sqlmodel + Earth Engine)
 # =============================================================================
-streamlit>=1.28.0
-folium>=0.14.0
-streamlit-folium>=0.15.0
-streamlit-deckgl>=0.5.0
-plotly>=5.15.0
-pillow>=10.0.0
-streamlit-option-menu>=0.3.6
-streamlit-aggrid>=0.3.4
+# Streamlit/folium/plotly/aggrid were removed at TAHAP E (React SPA is now
+# the only UI; requirements here must mirror pyproject.toml). What remains:
+#  - sqlmodel        — lazy-imported by src/database.py (model registry DB)
+#  - earthengine-api — lazy-imported for GEE band fetch with synthetic fallback
 sqlmodel>=0.0.14
 earthengine-api>=0.1.371
 
