@@ -24,6 +24,19 @@ RUN if [ -f package-lock.json ]; then \
       npm install --no-audit --no-fund; \
     fi
 
+# Locale JSONs + theme tokens are the single-source-of-truth shared with the
+# legacy Streamlit-era frontend (`frontend/locales/{en,id}.json`,
+# `frontend/themes/tokens.json`). Two build inputs reach OUTSIDE the SPA dir:
+#   - `i18n.ts` imports `../../../frontend/locales/...`  -> /frontend/locales
+#   - `tailwind.config.cjs` requires `../frontend/themes/tokens.json`
+#                                                       -> /frontend/themes
+# Both resolve to absolute paths relative to this stage's WORKDIR /spa, so we
+# COPY them to those absolute locations before `npm run build`. (Fixes HF
+# Spaces build 2026-08-05: TS2307 + [vite:css] "Cannot find module
+# '../frontend/themes/tokens.json'".)
+COPY frontend/locales/ /frontend/locales/
+COPY frontend/themes/ /frontend/themes/
+
 # Copy the rest of the React sources + Vite config + tsconfig + tailwind.
 COPY frontend_react/ ./
 
@@ -60,9 +73,16 @@ COPY requirements.txt ./
 
 # CPU-only PyTorch keeps the image ~700 MB smaller than the CUDA build and
 # matches the FIREvCPU training env (pickle version parity).
+#
+# nvidia-nccl-cu12: xgboost>=3.0 declares it as a hard metadata dep on
+# Linux, but the CPU inference path (`tree_method='hist'`, `device='cpu'`)
+# never imports it. Uninstall it after the main install so the ~340 MB
+# CUDA lib does not bloat this CPU-only image. `|| echo` keeps the build
+# green when the package is absent (e.g. future xgboost drops the dep).
 RUN pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        -r requirements.txt
+        -r requirements.txt \
+    && (pip uninstall -y nvidia-nccl-cu12 || echo "nvidia-nccl-cu12 not present")
 
 # ---------------------------------------------------------------------------
 # Application source
