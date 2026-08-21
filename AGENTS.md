@@ -38,6 +38,11 @@ Dockerfile              → TAHAP E MULTI-STAGE: Node 20 builds React (stage `sp
                           -> Python 3.12 slim serve base (`base`). Target tunggal :7860.
 Procfile                → `web: python start_api.py` (single-service; Render-free)
 docker-compose.yml      → single service `firecast` (api+SPA). nginx profile untuk HTTPS.
+scripts/deploy_hf_space.py → deploy HF Space BUILD-ONLY (allowlist staging): build SPA lokal,
+                          stage src/+models/+data parquet+build/, upload via Hub API (Xet),
+                          tunggu RUNNING, verifikasi /health. Target: Kaido1/firecast-private
+                          (Space publik; nama lama dipertahankan karena recreate Docker Space
+                          diblokir kebijakan PRO 2026). Butuh env HF_TOKEN.
 
 backend (src/)
   config.py            → dataclass config + legacy module-level vars (jangan dihapus)
@@ -186,6 +191,13 @@ nginx/conf.d/firecast.conf → TAHAP E: SPA history-mode reverse-proxy (HTTPS op
 > mingguan + dependensi silang. Update setiap ada item yang dicentang.
 
 - **render.yaml dihapus** (deployment target Hugging Face Spaces, bukan Render).
+- **Deploy HF Space (2026-08-20)**: target `Kaido1/firecast-private` (dibuat publik;
+  nama lama dipertahankan — recreate Docker Space diblokir kebijakan PRO 2026, 402).
+  Alur: `scripts/deploy_hf_space.py` (allowlist staging, build-only — source React/
+  tests/notebooks/docs TIDAK ikut; `API_SECRET_KEY` via Space secret terenkripsi).
+  `git push` ke HF ditolak pre-receive (binary/Xet) → upload via Hub API `upload_folder`.
+  Insiden historis: GEE key sempat bocor ke Space publik (commit lama) — key sudah
+  dicabut (invalid_grant) & diganti; key baru hanya di `secrets/` (gitignored).
 - **Dockerfile** sekarang multi-stage: `spa-build` (Node 20) → `base` (Python 3.12). Target tunggal :7860.
 - **docker-compose.yml** single-service `firecast`; profile production menambah nginx (HTTPS).
 - **nginx/conf.d/firecast.conf** di-rewrite untuk single upstream (history-mode SPA fallback via FastAPI, nginx hanya TLS + cache headers).
