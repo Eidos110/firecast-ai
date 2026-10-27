@@ -5,13 +5,16 @@ Activate a specific model version.
 """
 
 import argparse
+
 from src.models import registry
 
 
 def main():
     parser = argparse.ArgumentParser(description="Activate a model version")
     parser.add_argument(
-        "--model", required=True, choices=["cnn", "lgbm"], help="Model name"
+        "--model",
+        required=True,
+        help="Logical model name (e.g. cnn, lgbm, lgb, xgb, stacking).",
     )
     parser.add_argument("--version", required=True, help="Version string to activate")
 

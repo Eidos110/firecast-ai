@@ -22,6 +22,7 @@ Usage:
 The Space secret ``API_SECRET_KEY`` is managed in the HF UI/API (encrypted),
 never in this repo.
 """
+
 from __future__ import annotations
 
 import os
@@ -88,21 +89,12 @@ RUN pip install --no-cache-dir \\
 
 COPY . .
 
-RUN mkdir -p /app/models /app/data && \\
-    if [ -f /app/data/sample_data_hf.csv ] && \\
-       [ ! -f /app/data/processed_firecast_features_v3.csv ] && \\
-       [ ! -f /app/data/processed_firecast_features_v3.parquet ]; then \\
-        cp /app/data/sample_data_hf.csv /app/data/processed_firecast_features_v3.csv; \\
-        echo "[FireCast] Using sample data for Hugging Face Spaces"; \\
-    fi
+RUN mkdir -p /app/models /app/data
 
 ENV PYTHONPATH=/app \\
     PORT=7860 \\
     HOST=0.0.0.0 \\
-    ENABLE_DEMO_MODE=true \\
-    ML_DEVICE=cpu \\
-    ENABLE_CORS=true \\
-    ALLOWED_ORIGINS="*"
+    ML_DEVICE=cpu
 
 EXPOSE 7860
 
@@ -126,25 +118,24 @@ pinned: false
 
 **Fire Risk Prediction System using Ensemble Machine Learning**
 
-Interactive map-based fire risk prediction for Indonesia. Ensemble of LightGBM,
-XGBoost, CNN-1D and Causal GRU with SHAP explainability, served as a single
-FastAPI + React SPA service.
+Interactive map-based fire risk prediction for Indonesia. V4.2 two-leg stack
+(LightGBM + XGBoost + LogisticRegressionCV meta, isotonic calibration) with
+SHAP explainability, served as a single FastAPI + React SPA service.
 
 ## Runtime
 
-- **Backend**: FastAPI (`src/`) — `/predict`, `/predict/aoi`, `/weather`,
+- **Backend**: FastAPI (`src/`) — `/predict`, `/predict/aoi`,
   `/geo/*`, `/analytics/*`, `/api/models/*`, `/health`
 - **Frontend**: pre-built React SPA (`frontend_react/build/`) — source is not
   shipped with this Space
-- **Models**: `models/` (legacy CNN+LGBM bundle) + `add_new_model/` (stacking
-  lgb/xgb/meta + causal GRU weights)
+- **Models**: `add_new_model/` (V4.2 stack + calibrator) and `models/`
+  (legacy CNN + LightGBM bundle for `model_type="legacy"`)
 - **Data**: Parquet feature datasets (`data/*.parquet`) + `locations.json`
 
 ## Notes
 
 - CPU-only inference (PyTorch CPU wheels, `ML_DEVICE=cpu`).
-- Demo mode auto-enables when model bundles are missing.
-- Rate limits: 30 req/min per IP on `/predict` & `/weather`.
+- Rate limits: 30 req/min per IP on `/predict`; 10/min on `/predict/aoi`.
 - `/predict` requires the `X-API-Key` header (Space secret `API_SECRET_KEY`).
 """
 
@@ -190,7 +181,8 @@ def stage(staging: Path) -> int:
 
     # Hard leak guards — fail loudly if the allowlist ever drifts.
     forbidden = [
-        p for p in files
+        p
+        for p in files
         if p.suffix in {".tsx", ".ts", ".ipynb"}
         or p.name.startswith(".env")
         or "firecast-001" in p.name

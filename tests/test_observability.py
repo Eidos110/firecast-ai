@@ -93,6 +93,34 @@ class TestObservabilityNoOp(unittest.TestCase):
 
         self.assertFalse(is_enabled())
 
+    def test_span_does_not_swallow_body_exceptions(self):
+        """An active tracer must not turn a body exception into a double-yield."""
+        from src import observability
+
+        class _FakeSpanCM:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def set_attribute(self, *_args):
+                return None
+
+        class _FakeTracer:
+            def start_as_current_span(self, _name):
+                return _FakeSpanCM()
+
+        observability._TRACER = _FakeTracer()
+        try:
+            with (
+                self.assertRaises(ValueError),
+                observability.span("test.boom"),
+            ):
+                raise ValueError("boom")
+        finally:
+            observability._TRACER = None
+
 
 class TestObservabilityFakeInit(unittest.TestCase):
     """Init with a fake-looking DSN exercises code paths without SDK installed.

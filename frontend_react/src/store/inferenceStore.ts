@@ -40,6 +40,12 @@ export interface PredictionResult {
   latency_ms: number;
   timestamp: string;
   status: string;
+  /**
+   * Backend honesty flag (audit 2026-08-23): "experimental" while the
+   * stacking model's offline validation has open methodology issues.
+   * Rendered as a badge in RightDiagnostic; absent on legacy results.
+   */
+  model_validation_status?: string;
   [k: string]: unknown;
 }
 

@@ -1,15 +1,16 @@
 """Geo service helpers for the FireCast Geo API (Tahap B).
 
-This module is the API-safe port of the Streamlit-only helpers that used to
-live in ``frontend/utils``:
+This module is the single backend implementation of the geo/AOI helpers.
+The old Streamlit-era ``frontend/utils`` copies were removed after the React
+SPA migration:
 
-* ``frontend/utils/analytics.py`` → ``get_trend_series`` (no ``@st.cache_data``
-  here; FastAPI/``lru_cache`` are used instead so the same code serves the
-  REST backend and remains importable from tests with no Streamlit runtime).
-* ``frontend/utils/aoi_analysis.py`` → ``build_aoi_grid`` + ``run_aoi_batch``
-  (grid generation moved here so the SPA can POST a GeoJSON polygon and get
-  a batch prediction back without re-implementing the grid logic in TS).
-* Sidebar city lookup → ``load_locations`` / ``geocode``.
+* ``get_trend_series`` — per-day risk trend, memoised by file mtime.
+* ``build_aoi_grid`` + ``run_aoi_batch`` — GeoJSON polygon → grid → batch
+  predictions for the SPA heatmap.
+* ``load_locations`` / ``geocode`` — Indonesia city registry + Nominatim
+  fallback for the sidebar search.
+
+Nothing here imports Streamlit.
 
 Design rules (from PLAN.md §1 + AGENTS.md §3):
 
@@ -182,9 +183,8 @@ def _nominatim_geocode(query: str, timeout: float = 5.0) -> dict | None:
     if not q:
         return None
 
-    url = (
-        "https://nominatim.openstreetmap.org/search?"
-        + urllib.parse.urlencode({"q": q, "format": "json", "limit": 1, "countrycodes": "id"})
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+        {"q": q, "format": "json", "limit": 1, "countrycodes": "id"}
     )
     req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     try:
@@ -283,14 +283,21 @@ def _trend_compute(
     if df is None or len(df) == 0:
         return {"lat": lat, "lon": lon, "radius_km": radius_km, "days": days, "series": []}
 
-    lat_col = next((c for c in ("lat", "latitude", "Latitude", "LAT", "lat_deg") if c in df.columns), None)
-    lon_col = next((c for c in ("lon", "longitude", "Longitude", "LON", "lon_deg") if c in df.columns), None)
+    lat_col = next(
+        (c for c in ("lat", "latitude", "Latitude", "LAT", "lat_deg") if c in df.columns), None
+    )
+    lon_col = next(
+        (c for c in ("lon", "longitude", "Longitude", "LON", "lon_deg") if c in df.columns), None
+    )
     if lat_col is None or lon_col is None:
         return {"lat": lat, "lon": lon, "radius_km": radius_km, "days": days, "series": []}
 
     prob_col = next(
-        (c for c in ("probability", "prob", "pred_prob", "score", "fire_prob", "probability_fire")
-         if c in df.columns),
+        (
+            c
+            for c in ("probability", "prob", "pred_prob", "score", "fire_prob", "probability_fire")
+            if c in df.columns
+        ),
         None,
     )
 
@@ -325,7 +332,15 @@ def _trend_compute(
         return {"lat": lat, "lon": lon, "radius_km": radius_km, "days": days, "series": []}
 
     sub["day"] = sub["time"].dt.floor("D")
-    prob_values = sub[prob_col].astype(float) if (prob_col and prob_col in sub.columns) else sub.get("label", pd.Series([0] * len(sub))).astype(float)
+    if prob_col and prob_col in sub.columns:
+        prob_values = sub[prob_col].astype(float)
+    elif "label" in sub.columns:
+        prob_values = sub["label"].astype(float)
+    else:
+        # No score column at all: the row-index default MUST reuse ``sub``'s
+        # index, otherwise ``prob_values.loc[grp.index]`` raises KeyError for
+        # every row after the first group.
+        prob_values = pd.Series(0.0, index=sub.index)
 
     grouped = sub.groupby("day")
     series: list[dict[str, Any]] = []
@@ -433,7 +448,9 @@ def get_trend_series(
 # ---------------------------------------------------------------------------
 
 
-def _bbox_of_rings(rings: Iterable[Iterable[tuple[float, float]]]) -> tuple[float, float, float, float] | None:
+def _bbox_of_rings(
+    rings: Iterable[Iterable[tuple[float, float]]],
+) -> tuple[float, float, float, float] | None:
     """Return ``(min_lat, min_lon, max_lat, max_lon)`` for a list of rings.
 
     Accepts GeoJSON polygon ``coordinates`` (list of rings, each a list of
@@ -574,14 +591,14 @@ def run_aoi_batch(
     with ``lat``/``lon`` so the SPA can scatter-plot the batch on the map.
 
     Failure handling (PLAN §1 + AGENTS.md §3 — never silent 0.5):
-      * If ``predict_fire_risk`` itself raises ``PredictionError`` we re-raise
-        so the endpoint responds 500 with the underlying message.
-      * If a *single* point's prediction raises, we mark that point
+      * A point whose prediction raises is marked
         ``{"lat", "lon", "status": "error", "error": str(exc)}`` rather than
-        killing the whole batch — this preserves the user's other 63 points.
+        killing the whole batch — this preserves the user's other cells.
         A 0.5 fallback is NOT used because that would silently mask a real
         fire on the map. The SPA filters ``status == "error"`` out of the
         heatmap but shows them in the AOI table as failed cells.
+      * ``/predict/aoi`` reports ``ok``/``errors`` counts so callers can see
+        partial failures without inspecting every row.
     """
     if not points:
         return []

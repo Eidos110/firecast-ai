@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 from src.database import ModelVersion  # noqa: E402
 
 
+def _resolve_registry_path(value: str | Path) -> Path:
+    """Resolve a registry path against the repo root, not the process cwd.
+
+    Registry rows historically stored repo-relative paths such as
+    ``add_new_model/lgb_model.pkl``. Resolving those against an arbitrary
+    worker cwd made the whitelist check fail after a deploy even though the
+    file was valid. Absolute paths pass through unchanged.
+    """
+    from src import config
+
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = Path(config.BASE_DIR) / candidate
+    return candidate.resolve()
+
+
 def get_active_model_version(model_name: str) -> Any | None:
     """
     Get the active version for a specific model.
@@ -87,7 +103,7 @@ def get_model_path(model_name: str, version: str | None = None) -> str | None:
             # Validate path to prevent directory traversal.
             # The whitelist must mirror ``register_model_version``'s allowed
             # roots (audit Fase 1g): both ``models/`` (legacy CNN+LGBM stack)
-            # AND ``add_new_model/`` (new stacking: lgb/xgb/meta/causal_gru) are
+            # AND ``add_new_model/`` (V4.2 stack: lgb/xgb/meta/calibration) are
             # legitimate storage locations. A model registered under
             # ``add_new_model/`` would otherwise be silently inaccessible here.
             if result:
@@ -100,7 +116,7 @@ def get_model_path(model_name: str, version: str | None = None) -> str | None:
                     )
 
                     allowed_roots = allowed_model_roots()
-                    file_path_resolved = Path(result).resolve()
+                    file_path_resolved = _resolve_registry_path(result)
                     # Ensure the resolved path is within at least one root.
                     if is_path_within_allowed_roots(file_path_resolved, allowed_roots):
                         return str(file_path_resolved)
@@ -126,11 +142,29 @@ def register_model_version(
     metadata: dict[str, Any] | None = None,
     performance_metrics: dict[str, Any] | None = None,
 ) -> bool:
-    """Register a new model version."""
+    """Register a new model version.
+
+    ``file_path`` is validated against the same ``models/`` + ``add_new_model/``
+    whitelist used by :func:`get_model_path`. The HTTP router validates first,
+    but CLI callers (``scripts/register_model.py``) reach this function
+    directly, so the check lives here too (defence in depth).
+    """
     try:
         from sqlmodel import Session
 
+        from src import config
         from src.database import get_engine, init_db
+        from src.utils.path_safety import (
+            allowed_model_roots,
+            is_path_within_allowed_roots,
+        )
+
+        candidate = _resolve_registry_path(file_path)
+        if not is_path_within_allowed_roots(candidate, allowed_model_roots()):
+            logger.error("Refusing to register model outside allowed roots: %s", file_path)
+            return False
+        # Store a portable repo-relative path (see _resolve_registry_path).
+        stored_path = candidate.relative_to(Path(config.BASE_DIR).resolve()).as_posix()
 
         init_db()
         engine = get_engine()
@@ -143,7 +177,7 @@ def register_model_version(
         new_version = ModelVersion(
             model_name=model_name,
             version_string=version,
-            file_path=file_path,
+            file_path=stored_path,
             model_metadata=metadata_json,
             performance_metrics=performance_json,
             created_at=datetime.now(),

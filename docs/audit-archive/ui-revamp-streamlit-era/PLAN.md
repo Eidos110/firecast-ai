@@ -186,7 +186,7 @@ Helper baru. Signature:
 ```python
 def render_shap_waterfall(shap_explanation: dict, base_value: float = 0.5) -> None
 ```
-Pakai Plotly `go.Waterfall` (orientation h), batasi 10 top features, warna `RISK_COLORS["tinggi"]` (menaik) / `RISK_COLORS["rendah"]` (menurunkan). Konsisten dengan preview PNG di `_preview_ui/preview_shap_waterfall.png`.
+Pakai Plotly `go.Waterfall` (orientation h), batasi 10 top features, warna `RISK_COLORS["tinggi"]` (menaik) / `RISK_COLORS["rendah"]` (menurunkan). Konsisten dengan desain visual React SPA (`frontend_react/src/components/RightDiagnostic.tsx`).
 
 **AC**: input `{"top_features":[{"feature":"temp","shap_value":0.1},...]}` → render bar waterfall cumulatif dengan label `f(x) = X.XXX`.
 

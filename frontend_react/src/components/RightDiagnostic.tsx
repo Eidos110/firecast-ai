@@ -58,7 +58,7 @@ export function RightDiagnostic(): JSX.Element {
         <div className="fc-mono" style={{ fontSize: 28, fontWeight: 700, color }}>
           {prediction ? score.toFixed(3) : '—'}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
           <span
             style={{
               background: `rgba(${hexToRgb(color)},0.18)`,
@@ -73,6 +73,22 @@ export function RightDiagnostic(): JSX.Element {
           >
             {t(`spa.legend.${tierId}`)}
           </span>
+          {prediction?.model_validation_status === 'experimental' && (
+            <span
+              title={t('spa.metrics.experimental_badge_hint')}
+              style={{
+                background: 'rgba(245,158,11,0.15)',
+                color: 'var(--color-warning, #d97706)',
+                border: '1px solid var(--color-warning, #d97706)',
+                padding: '2px 8px',
+                borderRadius: 10,
+                fontSize: 10,
+                fontWeight: 600,
+              }}
+            >
+              ⚠ {t('spa.metrics.experimental_badge')}
+            </span>
+          )}
           {prediction?.confidence != null && (
             <span className="fc-mono" style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>
               {t('spa.metrics.confidence')}: ±{prediction.confidence.toFixed(2)}

@@ -4,7 +4,6 @@ Uses FastAPI's ``TestClient`` (backed by ``httpx``) to exercise the endpoints
 that the audit flagged as having zero coverage:
 
 - ``GET /health`` — public health check.
-- ``GET /precompute_progress`` — gated by ``X-API-Key``.
 - ``GET /api/models/``, ``GET /api/models/{name}``, ``.../active`` — gated.
 - ``POST /api/models/register``, ``.../activate`` — gated + body validation.
 - Auth edge cases:
@@ -98,25 +97,6 @@ class TestHealthEndpoint(_ApiTestBase):
 
 
 @unittest.skipUnless(_HTTPX_OK, "httpx/fastapi not installed — skipping API tests")
-class TestPrecomputeProgress(_ApiTestBase):
-    def test_requires_api_key(self):
-        resp = self.client.get("/precompute_progress")
-        self.assertEqual(resp.status_code, 401)
-
-    def test_wrong_key_rejected(self):
-        resp = self.client.get("/precompute_progress", headers=self._headers(wrong=True))
-        self.assertEqual(resp.status_code, 401)
-
-    def test_valid_key_returns_payload(self):
-        resp = self.client.get("/precompute_progress", headers=self._headers())
-        self.assertIn(resp.status_code, (200, 503))  # DB may be unavailable in sandbox
-        if resp.status_code == 200:
-            body = resp.json()
-            for k in ("status", "current", "total", "message"):
-                self.assertIn(k, body)
-
-
-@unittest.skipUnless(_HTTPX_OK, "httpx/fastapi not installed — skipping API tests")
 class TestModelsRouter(_ApiTestBase):
     def test_list_requires_api_key(self):
         resp = self.client.get("/api/models/")
@@ -173,7 +153,7 @@ class TestAuthPlaceholderGuard(_ApiTestBase):
         config._config_instance = None  # force re-evaluation on next get_config()
         try:
             resp = self.client.get(
-                "/precompute_progress",
+                "/admin/cache/stats",
                 headers={"X-API-Key": "your_secure_api_secret_key_here"},
             )
             self.assertEqual(resp.status_code, 500)
@@ -210,11 +190,9 @@ class TestAdminCacheEndpoints(_ApiTestBase):
         body = resp.json()
         self.assertEqual(body.get("status"), "ok")
         cleared = body.get("cleared", {})
-        # Each named cache must report an integer 0/1 count even if cache is absent.
+        # Each named cache must report an integer count even if cache is absent.
         for _name, count in cleared.items():
             self.assertIsInstance(count, int)
-        # csv_data_cache + prediction_cache should be present per the implementation.
-        self.assertIn("csv_data_cache", cleared)
         self.assertIn("prediction_cache", cleared)
 
     def test_stats_requires_api_key(self):
@@ -228,7 +206,6 @@ class TestAdminCacheEndpoints(_ApiTestBase):
         self.assertEqual(body.get("status"), "ok")
         stats = body.get("stats", {})
         self.assertIn("prediction_cache", stats)
-        self.assertIn("csv_data_cache", stats)
 
 
 @unittest.skipUnless(_HTTPX_OK, "httpx/fastapi not installed — skipping API tests")
@@ -364,9 +341,7 @@ class TestGeoGeocodeEndpoint(_ApiTestBase):
         original = _svc._nominatim_geocode
         _svc._nominatim_geocode = lambda *a, **kw: None
         try:
-            resp = self.client.get(
-                "/geo/geocode", params={"q": "zzzzz_nonexistent_city_zzzzz"}
-            )
+            resp = self.client.get("/geo/geocode", params={"q": "zzzzz_nonexistent_city_zzzzz"})
             self.assertEqual(resp.status_code, 404)
         finally:
             _svc._nominatim_geocode = original
@@ -382,9 +357,7 @@ class TestGeoGeocodeEndpoint(_ApiTestBase):
         original = _svc._nominatim_geocode
         _svc._nominatim_geocode = lambda *a, **kw: fake_payload
         try:
-            resp = self.client.get(
-                "/geo/geocode", params={"q": "zzzzz_nonexistent_city_zzzzz"}
-            )
+            resp = self.client.get("/geo/geocode", params={"q": "zzzzz_nonexistent_city_zzzzz"})
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json(), fake_payload)
         finally:
@@ -396,15 +369,11 @@ class TestAnalyticsTrendEndpoint(_ApiTestBase):
     """``GET /analytics/trend?lat&lon&days=7`` — trend time-series aggreg."""
 
     def test_does_not_require_api_key(self):
-        resp = self.client.get(
-            "/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 7}
-        )
+        resp = self.client.get("/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 7})
         self.assertEqual(resp.status_code, 200)
 
     def test_response_shape(self):
-        resp = self.client.get(
-            "/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 7}
-        )
+        resp = self.client.get("/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 7})
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         for key in ("lat", "lon", "radius_km", "days", "series"):
@@ -426,9 +395,7 @@ class TestAnalyticsTrendEndpoint(_ApiTestBase):
         # days=0 must NOT 400 — it is clamped server-side to 1. The contract
         # is "graceful clamp" so a curious SPA user passing ?days=0 still
         # gets a 1-day window rather than an error toast.
-        resp = self.client.get(
-            "/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 0}
-        )
+        resp = self.client.get("/analytics/trend", params={"lat": -1.17, "lon": 100.40, "days": 0})
         self.assertEqual(resp.status_code, 200)
         self.assertLessEqual(resp.json()["days"], 90)
         self.assertGreaterEqual(resp.json()["days"], 1)
@@ -443,9 +410,7 @@ class TestAnalyticsTrendEndpoint(_ApiTestBase):
             FileNotFoundError("simulated missing CSV")
         )
         try:
-            resp = self.client.get(
-                "/analytics/trend", params={"lat": -1.17, "lon": 100.40}
-            )
+            resp = self.client.get("/analytics/trend", params={"lat": -1.17, "lon": 100.40})
             self.assertEqual(resp.status_code, 404)
         finally:
             _svc._trend_get_df = original
@@ -574,6 +539,18 @@ class TestPredictAoiEndpoint(_ApiTestBase):
         resp = self.client.post(
             "/predict/aoi",
             json={"grid_size": 2},
+            headers=self._headers(),
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_unknown_model_type_rejected(self):
+        resp = self.client.post(
+            "/predict/aoi",
+            json={
+                "geojson": self._VALID_GEOJSON,
+                "grid_size": 2,
+                "model_type": "gpu-experimental",
+            },
             headers=self._headers(),
         )
         self.assertEqual(resp.status_code, 422)
@@ -800,7 +777,9 @@ class TestPredictReferenceDate(_ApiTestBase):
                 "confidence": 0.8,
                 "timestamp": "2026-08-04T00:00:00",
                 "status": "success",
-                "reference_date_seen": None if reference_date is None else reference_date.isoformat(),
+                "reference_date_seen": (
+                    None if reference_date is None else reference_date.isoformat()
+                ),
             }
 
         monkeypatch.setattr(sp, "predict_fire_risk", fake_predict_fire_risk, raising=True)
@@ -824,7 +803,9 @@ class TestPredictReferenceDate(_ApiTestBase):
                 "confidence": 0.8,
                 "timestamp": "2026-08-04T00:00:00",
                 "status": "success",
-                "reference_date_seen": None if reference_date is None else reference_date.isoformat(),
+                "reference_date_seen": (
+                    None if reference_date is None else reference_date.isoformat()
+                ),
             },
         ):
             payload = {**self._base_payload(), "reference_date": "2026-06-15"}
@@ -848,12 +829,12 @@ class TestPredictReferenceDate(_ApiTestBase):
                 "confidence": 0.8,
                 "timestamp": "2026-08-04T00:00:00",
                 "status": "success",
-                "reference_date_seen": None if reference_date is None else reference_date.isoformat(),
+                "reference_date_seen": (
+                    None if reference_date is None else reference_date.isoformat()
+                ),
             },
         ):
-            r = self.client.post(
-                "/predict", json=self._base_payload(), headers=self._headers()
-            )
+            r = self.client.post("/predict", json=self._base_payload(), headers=self._headers())
             assert r.status_code == 200
             assert r.json()["reference_date_seen"] is None
 

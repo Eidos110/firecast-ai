@@ -81,6 +81,25 @@ logs/
 .env.*.local
 .env.production
 
+# ── Secrets & VCS — MUST never enter any image layer (audit 2026-08-23:
+#    previously only .env* was excluded, so secrets/firecast-*.json and the
+#    entire .git/ history rode into local `docker build` layers via COPY . .) ──
+secrets/
+.git/
+.gitattributes
+.gitignore
+*.zcode-session
+**/*service*account*.json
+**/firecast-*.json
+
+# ── Local artefacts that are rebuilt in-image or shadow fresh data ──
+# Parquet twins are a local data cache; the tracked CSV is the source of
+# truth (regen via scripts/migrate_to_parquet.py when needed).
+data/*.parquet
+# The SPA is compiled fresh in stage 0 (spa-build); a stale local build must
+# not leak into the final image.
+frontend_react/build/
+
 # ── Output / results ──
 output/
 results/

@@ -13,7 +13,6 @@ Options:
     --mode MODE         Mode to run (app, api, test) [default: app]
     --port PORT         Port to bind (default: 7860)
     --host HOST         Host to bind (default: 0.0.0.0)
-    --demo              Force demo mode
     --debug             Enable debug logging
 
 Post-React-SPA migration the old Streamlit frontend is retired. There is no
@@ -42,9 +41,7 @@ sys.path.insert(0, str(project_root))
 def setup_logging(debug: bool = False):
     """Configure logging."""
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     return logging.getLogger(__name__)
 
 
@@ -65,19 +62,19 @@ def check_environment():
         if not (project_root / dir_name).exists():
             issues.append(f"Required directory '{dir_name}' not found")
 
-    # Check for model files — missing ones only degrade to DEMO mode, not an error
-    model_files = ["cnn_best.pth", "lgbm_best.pkl", "scaler.pkl"]
-    models_dir = project_root / "models"
+    # Check for model files — missing ones only break inference at request time.
+    model_files = ["lgb_model.pkl", "xgb_model.pkl", "scaler_all.pkl"]
+    models_dir = project_root / "add_new_model"
     if models_dir.exists():
         missing_models = [f for f in model_files if not (models_dir / f).exists()]
         if missing_models:
-            print(f"! Warning: Missing model files: {', '.join(missing_models)}")
-            print("  The application will run in DEMO mode.")
+            print(f"! Warning: Missing V4.2 model files: {', '.join(missing_models)}")
+            print("  /predict will return an error until the bundle is restored.")
 
     return issues
 
 
-def run_app(host: str = "0.0.0.0", port: int = 7860, demo: bool = False):
+def run_app(host: str = "0.0.0.0", port: int = 7860):
     """Serve the FastAPI API together with the built React SPA.
 
     This proxies to ``start_api.py`` so demo-mode auto-detection, the SPA
@@ -87,8 +84,6 @@ def run_app(host: str = "0.0.0.0", port: int = 7860, demo: bool = False):
     env = os.environ.copy()
     env["API_HOST"] = host
     env["PORT"] = str(port)
-    if demo:
-        env["ENABLE_DEMO_MODE"] = "true"
     try:
         subprocess.run([sys.executable, str(project_root / "start_api.py")], env=env, check=True)
     except KeyboardInterrupt:
@@ -98,7 +93,7 @@ def run_app(host: str = "0.0.0.0", port: int = 7860, demo: bool = False):
         sys.exit(1)
 
 
-def run_api(host: str = "0.0.0.0", port: int = 8000, demo: bool = False):
+def run_api(host: str = "0.0.0.0", port: int = 8000):
     """Run the FastAPI server alone (no SPA mount)."""
     logger.info("Starting FireCast API (FastAPI) on http://%s:%s", host, port)
 
@@ -107,9 +102,6 @@ def run_api(host: str = "0.0.0.0", port: int = 8000, demo: bool = False):
     except ImportError:
         logger.error("uvicorn not installed. Run: pip install uvicorn[standard]")
         sys.exit(1)
-
-    if demo:
-        os.environ["ENABLE_DEMO_MODE"] = "true"
 
     try:
         uvicorn.run("src.geo_api:app", host=host, port=port, reload=False, log_level="info")
@@ -158,7 +150,6 @@ Examples:
   python launch_prototype.py                    # Serve API + built React SPA on :7860
   python launch_prototype.py --mode api         # Serve API only on :8000
   python launch_prototype.py --mode test        # Run the backend tests
-  python launch_prototype.py --demo             # Force demo mode
 
 Frontend dev (hot-module-reload):
   cd frontend_react && npm run dev              # http://localhost:3000
@@ -171,9 +162,10 @@ Frontend dev (hot-module-reload):
         default="app",
         help="Mode to run (default: app = API + React SPA)",
     )
-    parser.add_argument("--port", type=int, help="Port to bind (default: 7860 for app, 8000 for api)")
+    parser.add_argument(
+        "--port", type=int, help="Port to bind (default: 7860 for app, 8000 for api)"
+    )
     parser.add_argument("--host", help="Host to bind (default: 0.0.0.0)")
-    parser.add_argument("--demo", action="store_true", help="Force demo mode")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
@@ -208,14 +200,14 @@ Frontend dev (hot-module-reload):
             port = args.port or 7860
             print(f"\n>> App URL: http://localhost:{port}")
             print(">> Press Ctrl+C to stop\n")
-            run_app(host, port, args.demo)
+            run_app(host, port)
 
         elif args.mode == "api":
             port = args.port or 8000
             print(f"\n>> API URL: http://localhost:{port}")
             print(f">> API Docs: http://localhost:{port}/docs")
             print(">> Press Ctrl+C to stop\n")
-            run_api(host, port, args.demo)
+            run_api(host, port)
 
         elif args.mode == "test":
             run_tests()

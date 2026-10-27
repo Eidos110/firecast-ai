@@ -5,6 +5,7 @@ Provides functions to load and run XGBoost predictions.
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -12,7 +13,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def load_xgb_model(model_path: str | Path) -> any:
+def load_xgb_model(model_path: str | Path) -> Any:
     """
     Load XGBoost model from pickle file.
 
@@ -40,7 +41,7 @@ def load_xgb_model(model_path: str | Path) -> any:
 
 
 def predict_xgb(
-    model: any,
+    model: Any,
     X: np.ndarray,
     use_proba: bool = True,
 ) -> np.ndarray:
@@ -77,8 +78,12 @@ def predict_xgb(
                     if arr.min() < -0.1 or arr.max() > 1.1:
                         arr = 1.0 / (1.0 + np.exp(-arr))
                     return np.clip(arr, 0.0, 1.0)
+                raise RuntimeError("XGBoost .predict() returned None")
 
-        return model.predict(X)
+        raise RuntimeError(
+            f"Unsupported XGBoost model object {type(model).__name__}: "
+            "expected predict_proba() or predict()."
+        )
 
     except Exception as e:
         logger.error("XGBoost prediction failed: %s", e, exc_info=True)

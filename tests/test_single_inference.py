@@ -13,11 +13,13 @@ cases.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import numpy as np
 import pytest
 
+from src import config as config_mod
 from src.features.single_inference import (
     _safe_divide,
     create_feature_vector,
@@ -137,11 +139,25 @@ def test_create_feature_vector_legacy_shape(base_features):
 
 
 def test_create_feature_vector_new_shape(base_features):
-    """New stacking model: 79-dim feature vector per add_new_model schema."""
+    """New stacking model: feature width follows the ACTIVE bundle schema.
+
+    V4.2 cross-section bundle (activated 2026-08-29) ships 34 columns; the
+    retired V4.1 bundle had 79. Reading feature_cols.json keeps this test
+    valid across bundle swaps while still pinning width + finiteness.
+    """
     X = create_feature_vector(base_features, use_new_features=True)
     assert X.ndim == 2 and X.shape[0] == 1
-    # add_new_model/feature_columns.json hard-codes 79 columns.
-    assert X.shape[1] == 79
+    with open(config_mod.NEW_FEATURE_COLUMNS_PATH, encoding="utf-8") as f:
+        expected = len(json.load(f))
+    assert expected == 34, f"active bundle schema changed: {expected} cols (update this test)"
+    assert X.shape[1] == expected
+    assert np.isfinite(X).all()
+
+
+def test_create_feature_vector_clamps_out_of_range_humidity(base_features):
+    """humidity=0 would make log(0) raise; AOI/base callers bypass Pydantic."""
+    extreme = {**base_features, "humidity": 0.0}
+    X = create_feature_vector(extreme, use_new_features=False)
     assert np.isfinite(X).all()
 
 

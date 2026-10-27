@@ -47,9 +47,7 @@ def allowed_model_roots() -> list[Path]:
         return []
 
 
-def is_path_within_allowed_roots(
-    file_path: str | Path, roots: list[Path]
-) -> bool:
+def is_path_within_allowed_roots(file_path: str | Path, roots: list[Path]) -> bool:
     """Return True iff ``file_path`` resolves within at least one of ``roots``.
 
     ``roots`` entries should already be resolved (use

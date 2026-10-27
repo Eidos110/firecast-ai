@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "firecast"
-version = "1.0.0"
-description = "Fire Forecasting Ensemble Model using CNN + LightGBM"
+version = "4.0.0"
+description = "Fire risk forecasting API and React SPA (V4.2 two-leg stack + legacy CNN/LGBM)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -16,15 +16,14 @@ keywords = [
     "fire",
     "forecasting",
     "machine-learning",
-    "ensemble",
-    "cnn",
+    "stacking",
     "lightgbm",
+    "xgboost",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -33,59 +32,50 @@ classifiers = [
 ]
 
 dependencies = [
+    # Core data/ML
     "numpy>=1.26,<2",
     "pandas>=2.0.3",
+    "pyarrow>=14.0.0",
     "scikit-learn>=1.9.0",
     "torch>=2.4.1",
     "lightgbm==4.6.0",
     "xgboost==3.3.0",
     "shap>=0.45.0",
     "joblib>=1.3.1",
-    "matplotlib>=3.7.2",
-    "seaborn>=0.12.2",
-    "tqdm>=4.66.1",
-    "python-dotenv>=1.0.0",
-    "pyyaml>=6.0.1",
-    "requests>=2.31.0",
-    # Geospatial
+    # Geospatial (AOI point-in-polygon)
     "shapely>=2.0.0",
-    "geopandas>=0.14.0",
-    "h3>=3.7.6",
-    "pillow>=10.0.0",
-    "sqlmodel>=0.0.14",
-    "earthengine-api>=0.1.371",
-    # API
+    # API / persistence
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
-    "python-multipart>=0.0.6",
-    "apscheduler>=3.10.4",
+    "orjson>=3.10.0",
+    "cachetools>=5.5.0",
     "slowapi>=0.1.9",
+    "sqlmodel>=0.0.14",
+    "python-dotenv>=1.0.0",
+    # Optional observability (no-op when unconfigured)
+    "sentry-sdk[fastapi]>=1.40.0",
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.24.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "jupyter>=1.0.0",
     "ipython>=8.14.0",
+    "ipykernel>=6.25.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "hypothesis>=6.88.0",
     "httpx>=0.25.0",
     "ruff>=0.6.0",
     "black>=24.0.0",
     "mypy>=1.10.0",
     "pre-commit>=3.5.0",
-    "yoyo-migrations>=8.2",
     "nbstripout>=0.7.0",
 ]
-
-[project.urls]
-Homepage = "https://github.com/yourusername/firecast"
-Documentation = "https://github.com/yourusername/firecast/wiki"
-Repository = "https://github.com/yourusername/firecast.git"
-Issues = "https://github.com/yourusername/firecast/issues"
-
-[project.scripts]
-firecast = "main:main"
 
 [tool.setuptools]
 packages = [
@@ -122,7 +112,18 @@ line_length = 100
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["notebooks", "firecast-private", "tmp-space-deploy", "frontend_react/build", "frontend_react/node_modules"]
+extend-exclude = [
+    "notebooks",
+    # Executed artifacts: notebook cells carry embedded outputs from real training
+    # runs; auto-fix would desync source from recorded outputs. Training notebooks
+    # are verified by deterministic re-execution (SEED pinned, metrics asserted),
+    # not by lint.
+    "*.ipynb",
+    "firecast-private",
+    "tmp-space-deploy",
+    "frontend_react/build",
+    "frontend_react/node_modules",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
@@ -135,9 +136,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "E402"]  # assert ok; sys.path tweaks require late imports
+"scripts/inference.py" = ["E402"]  # sys.path bootstrap requires late import (same pattern as tests/*)
 "src/config.py" = ["E402"]    # late imports intentional (lazy torch guard)
 "src/predict.py" = ["F821", "E402"]   # module-globals lazy registration pattern; late import
-"src/models/causal_gru.py" = ["F821"]  # __main__ defines class lazily
 "src/models/registry.py" = ["E402", "E712"]  # late imports + bool column comparison (the F821 NameError was fixed by src/utils/path_safety.py)
 
 # =============================================================================
@@ -165,13 +166,12 @@ filterwarnings = [
 
 [tool.coverage.run]
 branch = true
-source = ["src", "frontend/utils"]
+source = ["src"]
 omit = [
     "*/__main__.py",
     "*/tests/*",
     "*/node_modules/*",
     "*/frontend_react/*",
-    "*/_preview_ui/*",
 ]
 
 [tool.coverage.report]

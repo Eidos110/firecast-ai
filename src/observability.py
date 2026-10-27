@@ -124,7 +124,9 @@ def init_observability(
             trace.set_tracer_provider(provider)
             _TRACER = trace.get_tracer(service_name)
             result["opentelemetry"] = True
-            logger.info("OpenTelemetry initialised (service=%s, endpoint=%s)", service_name, otel_endpoint)
+            logger.info(
+                "OpenTelemetry initialised (service=%s, endpoint=%s)", service_name, otel_endpoint
+            )
         except Exception as e:  # pragma: no cover
             logger.warning("OpenTelemetry init failed (degraded): %s", e)
 
@@ -176,14 +178,20 @@ def span(name: str, **attrs: Any) -> Iterator[None]:
     """
     if _TRACER is not None:
         try:
-            with _TRACER.start_as_current_span(name) as _ot_span:
+            span_cm = _TRACER.start_as_current_span(name)
+        except Exception as e:  # pragma: no cover — exporter/tracer error
+            logger.debug("otel span '%s' could not start: %s", name, e)
+            span_cm = None
+        if span_cm is not None:
+            with span_cm as _ot_span:
                 for k, v in attrs.items():
                     with contextlib.suppress(Exception):
                         _ot_span.set_attribute(k, v)
+                # Never wrap the body in try/except: application exceptions
+                # must propagate, and swallowing one here would also yield a
+                # second time (RuntimeError: generator didn't stop).
                 yield
-                return
-        except Exception as e:  # pragma: no cover
-            logger.debug("otel span '%s' failed: %s", name, e)
+            return
     # Fallback / no-op path.
     yield
 

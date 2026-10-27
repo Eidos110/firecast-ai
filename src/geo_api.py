@@ -2,254 +2,41 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
-from collections import deque
 from contextlib import asynccontextmanager
-from functools import lru_cache
-from pathlib import Path
+from typing import Literal
 
-import h3
-import numpy as np
-import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
-from src import config
 from src.api import models
 from src.auth import get_api_key
+
+try:  # optional dependency — see AGENTS.md §6
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+
+    _HAS_SLOWAPI = True
+except ImportError:  # pragma: no cover - sandbox without slowapi
+    _HAS_SLOWAPI = False
+
+    class _NoopLimiter:
+        """Stand-in limiter when slowapi is unavailable (rate limit disabled)."""
+
+        def limit(self, *_args, **_kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# H3 v3 vs v4 compatibility shim (Audit rekomendasi "Geospatial").
-# h3 4.x renamed the public API:
-#   geo_to_h3          -> latlng_to_cell
-#   h3_to_geo          -> cell_to_latlng
-#   h3_to_geo_boundary -> cell_to_boundary  (returns list[tuple] instead of
-#                                  list[list] when ``geo_json=False``)
-#   h3_to_parent       -> cell_to_parent
-# ``requirements.txt`` pins ``h3>=3.7.6`` but the live FIREvCPU env has 4.5.0
-# installed. Both branches are therefore exercised and must keep working.
-# ---------------------------------------------------------------------------
-def _h3_latlng_to_cell(lat: float, lon: float, res: int) -> str:
-    if hasattr(h3, "latlng_to_cell"):
-        return h3.latlng_to_cell(lat, lon, res)
-    return h3.geo_to_h3(lat, lon, res)  # type: ignore[attr-defined]
-
-
-def _h3_cell_to_latlng(cell: str) -> tuple[float, float]:
-    if hasattr(h3, "cell_to_latlng"):
-        return h3.cell_to_latlng(cell)
-    return h3.h3_to_geo(cell)  # type: ignore[attr-defined]
-
-
-def _h3_cell_to_boundary(cell: str) -> list[tuple[float, float]]:
-    """Return polygon ring as ``[(lat, lon), ...]`` regardless of h3 version."""
-    if hasattr(h3, "cell_to_boundary"):
-        # v4: returns list[tuple[float, float]] of (lat, lon) already.
-        return list(h3.cell_to_boundary(cell))
-    # v3: geo_json=True swaps to (lon, lat); we keep (lat, lon) order.
-    return list(h3.h3_to_geo_boundary(cell, geo_json=False))  # type: ignore[attr-defined]
-
-
 # --- Authentication ---
-# ``get_api_key`` is imported from :mod:`src.auth` (single source) so security
-# policy (placeholder blacklist + ``secrets.compare_digest``) is consistent
-# across all protected endpoints. The api_key_header definition stays here
-# only for backward-compatible ``Security(api_key_header)`` resolution; the
-# canonical dependency is now ``deps=get_api_key``.
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-# Global progress tracking
-
-precompute_progress = {
-    "status": "idle",
-    "current": 0,
-    "total": 0,
-    "message": "",
-    "last_completed": deque(maxlen=100),  # Bounded to prevent memory leak
-}
-# Audit Fase 3c: removed ``scheduler = AsyncIOScheduler()`` — the scheduler
-# was instantiated but never started, never had any jobs added, and never
-# raised (because start() was never called). It leaked a dangling scheduler
-# object on every import. Re-introduce only when wired up via ``add_job``
-# and ``scheduler.start()`` inside an ``@app.on_event("startup")`` handler.
-
-ROOT = Path(__file__).resolve().parents[1]
-# Single source of truth for the inference-ready features CSV lives in
-# ``config.paths.processed_features_path``; the module-level alias keeps the
-# existing call-sites (DATA_PATH, getmtime(DATA_PATH), read_csv(DATA_PATH))
-# unchanged while staying in sync with config.
-DATA_PATH = config.get_config().paths.processed_features_path
-
-# Column name candidates for auto-detection
-LAT_CANDIDATES = ["latitude", "lat", "Latitude", "LAT", "lat_deg", "y"]
-LON_CANDIDATES = ["longitude", "lon", "Longitude", "LON", "lon_deg", "x"]
-PROB_CANDIDATES = [
-    "probability",
-    "prob",
-    "pred_prob",
-    "score",
-    "prediction_score",
-    "prob_fire",
-    "probability_fire",
-]
-TIME_CANDIDATES = ["time", "timestamp", "datetime", "date"]
-
-
-# --- In-Memory Data Cache ---
-
-
-class _DataCache:
-    """Thread-safe in-memory CSV cache with mtime-based invalidation."""
-
-    def __init__(self):
-        self._df: pd.DataFrame | None = None
-        self._columns: dict | None = None
-        self._mtime: float = 0.0
-        self._lock = threading.RLock()
-
-    def _detect_columns(self, df: pd.DataFrame) -> dict:
-        lat_col = next((c for c in LAT_CANDIDATES if c in df.columns), None)
-        lon_col = next((c for c in LON_CANDIDATES if c in df.columns), None)
-        prob_col = next((c for c in PROB_CANDIDATES if c in df.columns), None)
-        time_col = next((c for c in TIME_CANDIDATES if c in df.columns), None)
-        return {"lat": lat_col, "lon": lon_col, "prob": prob_col, "time": time_col}
-
-    def get(self) -> tuple[pd.DataFrame, dict]:
-        """Return cached DataFrame and detected columns, reloading if file changed."""
-        with self._lock:
-            try:
-                current_mtime = os.path.getmtime(DATA_PATH)
-            except OSError:
-                raise HTTPException(status_code=404, detail=f"Data not found at {DATA_PATH}")
-
-            if self._df is None or current_mtime != self._mtime:
-                try:
-                    self._df = pd.read_csv(DATA_PATH)
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=f"Failed reading CSV: {e}")
-                self._columns = self._detect_columns(self._df)
-                self._mtime = current_mtime
-
-            return self._df, self._columns
-
-    def invalidate(self):
-        """Force reload on next get() call."""
-        self._df = None
-        self._columns = None
-        self._mtime = 0.0
-
-
-_data_cache = _DataCache()
-
-
-def _get_cached_data() -> tuple[pd.DataFrame, dict]:
-    """Convenience wrapper to get cached data + columns."""
-    df, cols = _data_cache.get()
-    if cols["lat"] is None or cols["lon"] is None:
-        raise HTTPException(
-            status_code=400, detail="Latitude/longitude columns not found in dataset"
-        )
-    return df, cols
-
-
-# --- Vectorized H3 helpers ---
-# Audit rekomendasi "Geospatial _h3_index_vectorized ke np.vectorize":
-# replace the Python list-comprehension with ``np.vectorize`` (small but
-# measurable speed-up on >100-point AOI batches) AND layer a small bounded
-# cache keyed by (lat, lon, resolution) on top, so repeated Streamlit reruns
-# against the same lat/lon skip the H3 call entirely.
-@lru_cache(maxsize=4096)
-def _h3_index_cached(lat: float, lon: float, resolution: int) -> str:
-    """Return the H3 cell string for ``(lat, lon)`` at ``resolution``.
-
-    Cached per (lat, lon, resolution) — bounded to 4096 entries so the cache
-    does not grow unbounded across long-lived workers. ``str`` keys are
-    hashable and stable across Python processes.
-    """
-    return _h3_latlng_to_cell(lat, lon, resolution)
-
-
-# ``np.vectorize`` is not a true ufunc — it is a convenience wrapper that
-# still loops in Python — but it returns a real ``np.ndarray`` (object dtype
-# when the underlying result is str), which is what callers expect. The
-# cache above is what actually buys throughput; ``np.vectorize`` is mainly
-# for API consistency and to document intent.
-_h3_index_ufunc = np.vectorize(_h3_index_cached, otypes=[object])
-
-
-def _h3_index_vectorized(
-    lats: np.ndarray, lons: np.ndarray, resolution: int
-) -> np.ndarray:
-    """Compute H3 indices vectorised + cached per (lat, lon, res).
-
-    Args:
-        lats: 1-D or 2-D array of latitudes.
-        lons: 1-D or 2-D array of longitudes (same shape as ``lats``).
-        resolution: H3 resolution (0–15).
-
-    Returns:
-        ``np.ndarray`` of ``str`` H3 indices, same shape as ``lats``.
-    """
-    if lats.shape != lons.shape:
-        raise ValueError(
-            f"lats {lats.shape} and lons {lons.shape} must have equal shape"
-        )
-
-    # Flatten 2-D AOI grids — both the lru_cache path and the ndarray reshape
-    # below work best on contiguous 1-D input.
-    original_shape = lats.shape
-    flat_lats = lats.ravel()
-    flat_lons = lons.ravel()
-
-    # De-duplicate (lat, lon) pairs before calling the H3 encoder
-    # (ROADMAP §2-F): for AOI batches with repeated coordinates (common
-    # when Streamlit re-renders or when hexagon tessellation overlaps),
-    # ``np.unique`` collapses the unique (lat, lon) pairs into a small
-    # working set. H3 is then called once per unique pair — an O(unique)
-    # operation — instead of once per sample. The result is ``scatter``-ed
-    # back to the original ordering via the ``inv`` inverse map, so the
-    # output is bitwise identical to the naive per-point version.
-    #
-    # ``np.unique`` with ``axis=0`` + ``return_inverse=True`` runs in
-    # C on the contiguous view, making it cheap even for 10k-point AOIs.
-    latlon = np.column_stack([flat_lats, flat_lons])
-    uniq, inv = np.unique(latlon, axis=0, return_inverse=True)
-
-    # Call the (lru-cached) H3 encoder on the dedup'd coordinate set only.
-    uniq_cells = _h3_index_ufunc(uniq[:, 0], uniq[:, 1], resolution)
-
-    # Scatter back to the original ordering. ``uniq_cells[inv]`` is an
-    # ``ndarray`` of the same shape as ``flat_lats``.
-    flat_cells = uniq_cells[inv]
-    return flat_cells.reshape(original_shape)
-
-
-def _build_hex_record(hid: str, count: int, avg_prob: float | None) -> dict:
-    """Build a single hexagon record with polygon and centroid."""
-    hid_str = str(hid)  # Ensure Python str for H3 API compatibility
-    # Use the v3/v4 compat shim — h3.h3_to_geo_boundary was renamed to
-    # cell_to_boundary in v4. We always return (lat, lon) tuples here and
-    # swap to (lon, lat) for GeoJSON polygon (geo_api always emits GeoJSON).
-    boundary_latlon = _h3_cell_to_boundary(hid_str)
-    polygon = [[p[1], p[0]] for p in boundary_latlon]
-    if polygon[0] != polygon[-1]:
-        polygon.append(polygon[0])
-    centroid = _h3_cell_to_latlng(hid_str)
-    return {
-        "hex_id": hid_str,
-        "polygon": polygon,
-        "centroid": {"lat": centroid[0], "lon": centroid[1]},
-        "count": count,
-        "avg_prob": avg_prob,
-    }
-
+# All protected routes use ``get_api_key`` from :mod:`src.auth`, which owns
+# the placeholder blacklist and constant-time comparison.
 
 # --- FastAPI app ---
 # Audit priority 2 — ORJSONResponse as default response class. orjson is a
@@ -323,27 +110,39 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-# --- Rate Limiting ---
-limiter = Limiter(key_func=get_remote_address)
+# --- Rate limiting ---
+# slowapi is optional: without the wheel the app still serves requests, just
+# without per-IP caps (AGENTS.md §6). When it is installed, register the 429
+# handler so exceeding a limit returns 429 instead of an unhandled 500.
+limiter = Limiter(key_func=get_remote_address) if _HAS_SLOWAPI else _NoopLimiter()
 app.state.limiter = limiter
+if _HAS_SLOWAPI:
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # --- CORS ---
-# Load allowed origins from environment or use defaults for development
-
-allowed_origins = os.getenv(
-    "ALLOWED_ORIGINS", "http://localhost:8501,http://localhost:3000,http://localhost:8000"
-).split(",")
+# Same-origin SPA traffic needs no CORS. Set ALLOWED_ORIGINS only for
+# additional browser clients. A wildcard cannot be combined with credentials
+# (CORS spec), so credentials are disabled in that case.
+_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:8000,http://localhost:7860",
+    ).split(",")
+    if origin.strip()
+]
+_allow_all_origins = "*" in _ALLOWED_ORIGINS
+if _allow_all_origins:
+    logger.warning(
+        "ALLOWED_ORIGINS='*' disables credentialed CORS; set explicit origins in production."
+    )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in allowed_origins],
-    allow_credentials=True,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=not _allow_all_origins,
     allow_methods=["GET", "POST"],
-    allow_headers=[
-        "Content-Type",
-        "Authorization",
-        "X-API-Key",
-    ],  # Restrict to known headers
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 # Include routers
@@ -375,20 +174,6 @@ app.include_router(
 # ---------------------------------------------------------------------------
 
 
-# Optional per-IP cap that respects a slowapi availability (sandbox-safe).
-# Applied only when slowapi is installed AND limiter is wired; graceful no-op
-# otherwise so Railway/HF Spaces cores still serve /api/models without a 500.
-def _models_rate_limit(request: Request, *args, **kwargs):  # pragma: no cover - thin wrapper
-    """Best-effort slowapi rate-limit hook for /api/models endpoints.
-
-    Kept as a function (not a Depends wrapper) so callers can opt-in via the
-    ``@limiter.limit`` decorator on individual paths in ``src/api/models.py``
-    if a stricter cap is desired. Today the path handlers rely on X-API-Key
-    auth which is sufficient to discourage abuse.
-    """
-    return None
-
-
 # --- Health check ---
 @app.get("/health")
 @limiter.limit("120/minute")
@@ -413,9 +198,7 @@ async def health(request: Request):
 # Design notes:
 #   * Auth via ``Depends(get_api_key)`` — same gate as ``/api/models/*``.
 #     Anonymous requests get 401; never 403 (keeps cURL replay shallow).
-#   * Rate-limit 30/minute per IP (PLAN §3 "Panduan API" cap for /predict;
-#     OWM token bucket is independent and not bypassed here — caller still
-#     needs valid OPENWEATHER_API_KEY for live weather if used).
+#   * Rate-limit 30/minute per IP (PLAN §3 "Panduan API" cap for /predict).
 #   * Pydantic models below keep optional fields Optional with default
 #     ``None`` so a partial payload raises a *clear* 422 instead of silent
 #     0.5 fallback (AGENTS.md §3 — never return 0.5 on model error).
@@ -427,28 +210,38 @@ class PredictRequest(BaseModel):
     """Inbound features for ``/predict``.
 
     Mirrors the dict expected by :func:`src.predict.predict_fire_risk`.
-    Required keys match ``predict.py:938-944`` (``required_keys``). Optional
-    keys are those the Streamlit engine fills from GEE/OpenWeatherMap when
-    available; their absence is graceful — predict_fire_risk tolerates it.
+    Required keys match its ``required_keys`` list; optional keys (spectral
+    bands, vegetation class) are filled from GEE when available. Range
+    constraints reject physically impossible input with 422 instead of
+    letting a math error surface as 500.
     """
 
-    temperature: float = Field(..., description="Air temperature (°C)")
-    humidity: float = Field(..., description="Relative humidity (%)")
-    wind_speed: float = Field(..., description="Wind speed (m/s)")
+    temperature: float = Field(..., ge=-90, le=60, description="Air temperature (°C)")
+    humidity: float = Field(..., gt=0, le=100, description="Relative humidity (%)")
+    wind_speed: float = Field(..., ge=0, le=100, description="Wind speed (m/s)")
     latitude: float = Field(..., ge=-90, le=90, description="Latitude (WGS84)")
     longitude: float = Field(..., ge=-180, le=180, description="Longitude (WGS84)")
-    wind_direction: float | None = Field(default=None, description="Wind direction (deg from N)")
-    rainfall: float | None = Field(default=None, description="Rainfall (mm)")
-    ndvi: float | None = Field(default=None, description="Normalised Difference Vegetation Index (−1..1)")
+    wind_direction: float | None = Field(
+        default=None, ge=0, le=360, description="Wind direction (deg from N)"
+    )
+    rainfall: float | None = Field(default=None, ge=0, le=2000, description="Rainfall (mm)")
+    ndvi: float | None = Field(
+        default=None,
+        ge=-1,
+        le=1,
+        description="Normalised Difference Vegetation Index (−1..1)",
+    )
     vegetation_type: str | None = Field(default=None, description="Vegetation class")
-    fuel_moisture: float | None = Field(default=None, description="Fuel moisture content (%)")
+    fuel_moisture: float | None = Field(
+        default=None, ge=0, le=100, description="Fuel moisture content (%)"
+    )
     model_version: str | None = Field(
         default=None,
         description="Optional model version id. Defaults to registry active version.",
     )
-    model_type: str = Field(
+    model_type: Literal["new", "legacy"] = Field(
         default="new",
-        description="'new' (stacking) or 'legacy' (CNN+LGBM). Default 'new'.",
+        description="'new' (V4.2 stack) or 'legacy' (CNN+LGBM). Default 'new'.",
     )
     reference_date: str | None = Field(
         default=None,
@@ -604,12 +397,14 @@ from src.geo import services as _geo_services  # noqa: E402 — after app/limite
 @app.get("/geo/locations")
 @limiter.limit("30/minute")
 async def geo_locations(request: Request):
-    """Return the Indonesia city registry as a flat list (PLAN §3).
+    """Return the Indonesia city registry (PLAN §3).
 
     Public-read (no API key) so the SPA sidebar combobox works on hosted
     demos. Response shape::
 
-        [{"id": "abiageh", "name": "Abiageh", "lat": -4.48, "lon": 138.87}, ...]
+        {"count": 378, "locations": [
+            {"id": "abiageh", "name": "Abiageh", "lat": -4.48, "lon": 138.87}, ...
+        ]}
     """
     entries = _geo_services.load_locations()
     if not entries:
@@ -686,14 +481,18 @@ class AoiPolygonRequest(BaseModel):
         ...,
         description="A GeoJSON Polygon, MultiPolygon, or Feature whose geometry is a Polygon.",
     )
-    grid_size: int = Field(default=8, ge=1, le=64, description="Points per axis (grid_size**2 total).")
+    grid_size: int = Field(
+        default=8, ge=1, le=64, description="Points per axis (grid_size**2 total)."
+    )
     base_features: dict = Field(
         default_factory=dict,
         description="Inference features (temperature/humidity/wind_speed/rainfall/...) applied "
         "to every grid cell; latitude/longitude come from the grid point.",
     )
     model_version: str | None = Field(default=None, description="Optional active-model override.")
-    model_type: str = Field(default="new", description="'new' (stacking) or 'legacy'.")
+    model_type: Literal["new", "legacy"] = Field(
+        default="new", description="'new' (V4.2 stack) or 'legacy' (CNN+LGBM)."
+    )
 
 
 @app.post("/predict/aoi")
@@ -742,24 +541,6 @@ async def predict_aoi(
     }
 
 
-# Audit Fase 3c: removed ``_load_precomputed_hex`` + ``_invalidate_hex_cache``.
-# Both functions and their ``@lru_cache`` reader were never called from any
-# request handler — they were leftovers from a previous hex-precompute
-# pipeline (see deleted ``hexagons_res_{res}.json`` cache). If a future
-# feature needs this cache, re-introduce it through ``config.paths`` and a
-# registered endpoint (not a private helper). DEAD CODE removed here.
-
-
-@app.get("/precompute_progress")
-@limiter.limit("60/minute")
-async def get_precompute_progress(request: Request, api_key: str = Depends(get_api_key)):
-    """Get current precompute progress. Requires authentication."""
-    # Convert deque to list for JSON serialization
-    progress_copy = precompute_progress.copy()
-    progress_copy["last_completed"] = list(precompute_progress["last_completed"])
-    return progress_copy
-
-
 # ---------------------------------------------------------------------------
 # Admin cache endpoints (Audit priority 4)
 #
@@ -772,86 +553,34 @@ async def get_precompute_progress(request: Request, api_key: str = Depends(get_a
 @app.post("/admin/cache/invalidate")
 @limiter.limit("10/minute")
 async def admin_cache_invalidate(request: Request, api_key: str = Depends(get_api_key)):
-    """Drop every in-process cache so the next request recomputes fresh.
+    """Clear the in-process prediction cache.
 
-    Returns a dictionary describing what was cleared. Fails 500 only if the
-    handler itself crashes (e.g. cache.load ImportError) — never silently 401.
+    Model artifacts are re-read on every prediction request (no module-level
+    model cache), so only the TTL prediction cache needs invalidating after a
+    bundle swap or registry activation.
     """
-    cleared: dict[str, int] = {}
-
-    # 1. CSV DataFrame cache (mtime-based _DataCache in this module)
-    try:
-        _data_cache.invalidate()
-        cleared["csv_data_cache"] = 1
-    except Exception as e:  # pragma: no cover — defensive
-        logger.warning("Failed to invalidate _data_cache: %s", e)
-        cleared["csv_data_cache"] = 0
-
-    # 2. Module-globals model loader cache (predict.py lazily binds
-    #     load_cnn_model/load_lgbm_model/...). There is no module-global
-    #     ``clear_model_cache`` symbol anymore (Fase 3 refactor); the only
-    #     state worth dropping is the ``_init_models()`` success flag, which
-    #     is reset by simply unbinding predict globals. Safe noop here.
-    try:
-        import src.predict as _predict_mod
-
-        # Drop the runtime-bound model loaders so the next prediction
-        # re-resolves them (catches stale file paths after registry changes).
-        for _attr in (
-            "load_cnn_model",
-            "load_lgbm_model",
-            "load_xgb_model",
-            "predict_xgb",
-            "load_causal_gru_model",
-            "predict_causal_gru",
-            "load_bigru_model",
-            "predict_bigru",
-            "evaluate_ensemble",
-        ):
-            if hasattr(_predict_mod, _attr):
-                delattr(_predict_mod, _attr)
-        cleared["model_cache"] = 1
-    except Exception as e:  # pragma: no cover — graceful
-        logger.debug("model cache invalidation skipped: %s", e)
-        cleared["model_cache"] = 0
-
-    # 3. Audit priority 2 — TTLCache used by predict_fire_risk(use_cache=True)
     try:
         from src.cache import cache_clear as _clear_pred_cache
 
-        cleared["prediction_cache"] = int(_clear_pred_cache())
-    except Exception as e:  # pragma: no cover
-        logger.debug("prediction cache invalidation skipped: %s", e)
-        cleared["prediction_cache"] = 0
-
-    return {"status": "ok", "cleared": cleared}
+        cleared = int(_clear_pred_cache())
+    except Exception as exc:  # pragma: no cover - cache is optional
+        logger.debug("prediction cache invalidation skipped: %s", exc)
+        cleared = 0
+    return {"status": "ok", "cleared": {"prediction_cache": cleared}}
 
 
 @app.get("/admin/cache/stats")
 @limiter.limit("30/minute")
 async def admin_cache_stats(request: Request, api_key: str = Depends(get_api_key)):
-    """Return a snapshot of every in-process cache for operational dashboards."""
-    stats: dict[str, dict] = {}
-
-    # Prediction TTLCache metadata (bounded TTL slot count, no payloads).
+    """Return a bounded snapshot of the prediction cache for dashboards."""
     try:
         from src.cache import cache_stats as _pred_stats
 
-        stats["prediction_cache"] = _pred_stats()
-    except Exception as e:  # pragma: no cover
-        logger.debug("prediction cache stats skipped: %s", e)
-        stats["prediction_cache"] = {"enabled": False}
-
-    # CSV data cache snapshot — expose mtime + presence, not the DataFrame.
-    try:
-        stats["csv_data_cache"] = {
-            "loaded": _data_cache._df is not None,
-            "mtime_epoch": float(_data_cache._mtime),
-        }
-    except Exception as e:  # pragma: no cover
-        stats["csv_data_cache"] = {"error": str(e)}
-
-    return {"status": "ok", "stats": stats}
+        stats = _pred_stats()
+    except Exception as exc:  # pragma: no cover - cache is optional
+        logger.debug("prediction cache stats skipped: %s", exc)
+        stats = {"enabled": False}
+    return {"status": "ok", "stats": {"prediction_cache": stats}}
 
 
 # ---------------------------------------------------------------------------

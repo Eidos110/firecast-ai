@@ -1,0 +1,11 @@
+{
+  "optimal_threshold": 0.531592249368155,
+  "raw_optimal_threshold": 0.43185625713166254,
+  "threshold_scale": "calibrated",
+  "calibrator": "isotonic(fit VAL, out_of_bounds=clip)",
+  "final_method": "LogisticRegressionCV-2leg-OOF + isotonic calibration",
+  "final_auc": 0.841555330693318,
+  "meta_learner_type": "LogisticRegressionCV",
+  "schema": "v4.2-crosssection",
+  "gru_leg": false
+}

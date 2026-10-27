@@ -12,6 +12,7 @@ sits next to the requested `.csv`. Falls back to CSV silently so legacy
 deployments that have not run ``scripts/migrate_to_parquet.py`` keep
 working without any code path change.
 """
+
 import json
 from pathlib import Path
 

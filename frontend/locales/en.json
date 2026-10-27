@@ -234,6 +234,8 @@
       "api_log": "API Log",
       "p_fire": "P(fire)",
       "p_fire_window": "P(fire) next 24h",
+      "experimental_badge": "Experimental model",
+      "experimental_badge_hint": "The stacking model's offline validation has open methodology issues (temporal features built across locations, GRU early-stopping on the test split). Treat the probability as indicative, not operational — until retraining lands.",
       "confidence": "Confidence",
       "auc_roc": "AUC-ROC",
       "drift_ks": "Drift KS",

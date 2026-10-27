@@ -17,14 +17,13 @@ logger = logging.getLogger(__name__)
 
 # Try to import sqlmodel
 try:
-    from sqlmodel import Field, Session, SQLModel, create_engine, select, update
+    from sqlmodel import Field, Session, SQLModel, create_engine, select
 except ImportError:
     Field = None
     SQLModel = None
     create_engine = None
     Session = None
     select = None
-    update = None
 
 # Database URL from environment
 DATABASE_URL = os.environ.get(
@@ -299,16 +298,16 @@ def get_saved_locations() -> list:
 # ---------------------------------------------------------------------------
 # Retention policy (Audit priority: Database & Persistence)
 # ---------------------------------------------------------------------------
-# The ``Prediction`` table grows unbounded in long-lived deployments (Streamlit
-# dev session, HF Spaces persistent disk, or local laptop). Compact it via an
+# The ``Prediction`` table grows unbounded in long-lived deployments (HF
+# Spaces persistent disk or a local laptop). Compact it via an
 # explicit purge call rather than auto-VACUUM, which would block the SQLite
 # event loop on large tables. The default retention is 30 days; override via
 #   FIRECAST_PREDICTION_RETENTION_DAYS=14  (env)
 # or pass ``days`` explicitly. The function returns a dict suitable for admin
 # telemetry. Backend-agnostic: noop bila sqlmodel/sqlite missing.
 #
-# NOTE: not tied to Railway cron any more — invoke from Streamlit startup
-# (frontend/app.py), a CLI admin script, or periodic APScheduler job.
+# Invoke from a CLI/admin script or a platform cron; there is no scheduler
+# wired into the API process by default.
 # ---------------------------------------------------------------------------
 
 
@@ -343,29 +342,24 @@ def purge_old_predictions(days: int | None = None) -> dict[str, Any]:
         if engine is None:
             return {"enabled": False, "deleted": 0, "reason": "no engine"}
 
+        from sqlalchemy import delete, func
+
         with Session(engine) as session:
-            # count before deletion (cheap on SQLite)
-            total_before = session.exec(select(Prediction)).all()
-            count_before = len(total_before)
-
-            # delete older rows — SQLite supports the bulk delete in sqlmodel.
-            stmt = select(Prediction).where(Prediction.created_at < cutoff)
-            old_rows = session.exec(stmt).all()
-            for row in old_rows:
-                session.delete(row)
+            # COUNT(*) instead of materialising every row: the table can hold
+            # millions of predictions on a long-lived deployment.
+            count_before = int(session.exec(select(func.count()).select_from(Prediction)).one())
+            session.execute(delete(Prediction).where(Prediction.created_at < cutoff))
             session.commit()
+            count_after = int(session.exec(select(func.count()).select_from(Prediction)).one())
 
-            total_after = session.exec(select(Prediction)).all()
-            count_after = len(total_after)
-
-            # Run incremental VACUUM (only meaningful for SQLite) so disk
-            # space is reclaimed. Wrap in try/except because non-sqlite
-            # backends (postgres) will raise.
+        # VACUUM cannot run inside a transaction. SQLAlchemy opens one
+        # implicitly unless AUTOCOMMIT is requested, which made the previous
+        # best-effort call fail silently. Only SQLite needs this step.
+        if engine.dialect.name == "sqlite":  # pragma: no cover - dialect branch
             try:
-                if engine.dialect.name == "sqlite":  # pragma: no cover
-                    with engine.connect() as conn:
-                        conn.exec_driver_sql("VACUUM")
-            except Exception as e:  # pragma: no cover — VACUUM is best-effort
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    conn.exec_driver_sql("VACUUM")
+            except Exception as e:  # pragma: no cover - VACUUM is best-effort
                 logger.debug("VACUUM skipped: %s", e)
 
         logger.info(
@@ -396,16 +390,19 @@ def prediction_stats() -> dict[str, Any]:
         if engine is None:
             return {"enabled": False, "rows": 0, "reason": "no engine"}
 
+        from sqlalchemy import func
+
         with Session(engine) as session:
-            rows = session.exec(select(Prediction)).all()
-            count = len(rows)
-            if count == 0:
-                return {"enabled": True, "rows": 0, "oldest": None, "newest": None}
-            oldest = min(r.created_at for r in rows if r.created_at is not None)
-            newest = max(r.created_at for r in rows if r.created_at is not None)
+            count, oldest, newest = session.exec(
+                select(
+                    func.count(),
+                    func.min(Prediction.created_at),
+                    func.max(Prediction.created_at),
+                ).select_from(Prediction)
+            ).one()
             return {
                 "enabled": True,
-                "rows": count,
+                "rows": int(count),
                 "oldest": oldest.isoformat() if oldest else None,
                 "newest": newest.isoformat() if newest else None,
             }

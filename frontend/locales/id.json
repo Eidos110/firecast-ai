@@ -238,6 +238,8 @@
       "api_log": "Log API",
       "p_fire": "P(kebakaran)",
       "p_fire_window": "P(kebakaran) 24 jam ke depan",
+      "experimental_badge": "Model eksperimental",
+      "experimental_badge_hint": "Validasi offline model stacking masih memiliki masalah metodologi terbuka (fitur temporal dibangun lintas lokasi, early-stopping GRU pada data uji). Perlakukan probabilitas ini sebagai indikatif, bukan operasional — sampai retraining selesai.",
       "confidence": "Kepercayaan",
       "auc_roc": "AUC-ROC",
       "drift_ks": "Drift KS",

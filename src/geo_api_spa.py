@@ -10,7 +10,7 @@ Routing strategy (matches nginx/conf.d/firecast.conf):
     /                  -> index.html   (SPA shell, never cached)
     /assets/*          -> StaticFiles   (immutable, long max-age)
     /predict, /api/*, /geo/*, /analytics/*, /health,
-    /docs, /openapi.json, /admin/*, /precompute_progress
+    /docs, /openapi.json, /admin/*
                        -> FastAPI routes (declared BEFORE this mount)
 
 Caveat: FastAPI route order matters. :func:`mount_spa` MUST be invoked **after**
@@ -46,7 +46,6 @@ API_PREFIXES: tuple[str, ...] = (
     "/health",
     "/docs",
     "/openapi.json",
-    "/precompute_progress",
     "/redoc",
 )
 
@@ -94,8 +93,16 @@ def mount_spa(app: FastAPI, static_dir: Path) -> bool:
         # If the request maps to an actual static file (favicon.ico, robots.txt,
         # vite.svg, etc. in the build root), serve it directly. Otherwise fall
         # back to index.html so React Router can resolve the route client-side.
-        candidate = static_dir / path
-        if candidate.is_file():
+        #
+        # Security (audit 2026-08-23, bug #14): the raw ``static_dir / path``
+        # join followed no containment check, so ``GET /%2e%2e/%2e%2e/...``
+        # escaped the build dir and served ANY file on disk (verified: .env,
+        # secrets/*.json, the SQLite db) without auth. Resolve + is_relative_to
+        # confines serving to files inside static_dir; anything else falls back
+        # to index.html like any other unknown SPA route.
+        resolved_root = static_dir.resolve()
+        candidate = (static_dir / path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(resolved_root):
             media = _guess_media(path)
             return FileResponse(candidate, media_type=media)
         return FileResponse(index_path, media_type="text/html")
