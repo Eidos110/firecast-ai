@@ -15,8 +15,8 @@ from . import (
     utils,  # safe – utilities
 )
 
-# Heavy/dependent imports are lazy to survive Railway's sandbox restrictions
-# (PyTorch 1.10.2 triggers: libtorch_cpu.so: cannot enable executable stack there)
+# Heavy/dependent imports stay lazy for HF Spaces' sandbox (PyTorch can fail
+# there with `libtorch_cpu.so: cannot enable executable stack`; see src/utils/lazy.py)
 #   from . import predict
 #   from . import database
 #   from . import models

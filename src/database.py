@@ -36,8 +36,32 @@ _engine = None
 _initialized = False
 
 
+def _ensure_schema(engine) -> None:
+    """Create any missing tables for ``engine`` exactly once.
+
+    Called from :func:`get_engine` so a **fresh checkout** (no committed
+    ``data/firecast.db``, e.g. CI runners or a new container) has a usable
+    schema from the first query. Without this, ``/api/models/*`` returned
+    ``500 no such table: modelversion`` because the tables only existed in a
+    developer's local SQLite file.
+
+    Idempotent and non-fatal: failures leave ``_initialized`` False and are
+    logged, so sandboxed deployments (no sqlmodel/sqlite) keep degrading to
+    the documented 503 instead of crashing.
+    """
+    global _initialized
+    if _initialized or SQLModel is None or engine is None:
+        return
+    try:
+        SQLModel.metadata.create_all(engine)
+        _initialized = True
+        logger.info("Database schema ready: %s", DATABASE_URL)
+    except Exception as e:  # noqa: BLE001 - optional dependency, must not crash
+        logger.warning("Failed to initialize database: %s", e)
+
+
 def get_engine():
-    """Get or create the database engine.
+    """Get or create the database engine (schema ensured on creation).
 
     Detects the dialect from ``DATABASE_URL``: SQLite backends use the
     default ``StaticPool``-ish single-connection semantics and reject
@@ -67,23 +91,17 @@ def get_engine():
                 max_overflow=10,
                 pool_pre_ping=True,  # Verify connections before use
             )
+    # Also covers engines created before this module knew about the schema
+    # (e.g. imported and used directly by the model registry).
+    _ensure_schema(_engine)
     return _engine
 
 
 def init_db():
-    """Initialize database tables."""
-    global _initialized
-    if _initialized or SQLModel is None:
+    """Initialize database tables (kept for startup callers; idempotent)."""
+    if SQLModel is None:
         return
-
-    try:
-        engine = get_engine()
-        if engine:
-            SQLModel.metadata.create_all(engine)
-            _initialized = True
-            logger.info("Database initialized: %s", DATABASE_URL)
-    except Exception as e:
-        logger.warning("Failed to initialize database: %s", e)
+    _ensure_schema(get_engine())
 
 
 # Define table classes at module level - SQLAlchemy handles duplicates gracefully

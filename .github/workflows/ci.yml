@@ -1,6 +1,9 @@
 # =============================================================================
-# FireCast CI — Fase 5 quality gate
-# Matrix: Python 3.11 / 3.12, full test suite, lint, type-check, smoke build.
+# FireCast CI — quality gate
+# Python 3.12 only: the serving stack pins xgboost==3.3.0, which requires
+# Python >=3.12 (matches the documented FIREvCPU / container runtime).
+# Jobs: backend (ruff/black/compileall/pytest+coverage), React SPA (tsc/eslint/
+# vitest/build), Lighthouse audit, Docker smoke build.
 # =============================================================================
 name: CI
 
@@ -27,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12"]
 
     steps:
       - name: Checkout
@@ -44,7 +47,7 @@ jobs:
 
       - name: Install CPU PyTorch
         # CPU-only torch is ~200 MB smaller than the GPU build, matches the
-        # Railway / HF Spaces runtime, and avoids driver-version pinning.
+        # HF Spaces runtime, and avoids driver-version pinning.
         shell: bash
         run: |
           python -m pip install --upgrade pip
@@ -77,10 +80,6 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           # FastAPI / auth tests need a non-empty secret.
           API_SECRET_KEY: ci-dummy-secret-key-for-github-actions-only
-          # Frontend smoke tests must not hit live OpenWeatherMap (rate-limit safe
-          # + deterministic; see Task 5.2 / tests/test_ui_revamp_integration.py).
-          OPENWEATHER_API_KEY: ci-dummy-owm-key
-          DISABLE_REALTIME_WEATHER: "1"
         shell: bash
         run: |
           python -m pytest tests/ \
@@ -201,7 +200,7 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
-  # Job 4: Docker smoke build (CPU runtime used by Render/HF Spaces)
+  # Job 4: Docker smoke build (CPU runtime used by HF Spaces)
   # ---------------------------------------------------------------------------
   docker-smoke:
     name: Docker smoke build
