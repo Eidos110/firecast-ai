@@ -35,6 +35,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The training/eval datasets live in Git LFS; without this the
+          # checkout contains tiny pointer files and data-dependent tests
+          # would silently degrade. (Small runtime JSON such as
+          # data/locations.json is deliberately kept out of LFS.)
+          lfs: true
 
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
