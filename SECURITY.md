@@ -32,9 +32,25 @@ if ($bytes[0] -eq 0xEF) { [System.IO.File]::WriteAllBytes(".secrets.baseline", $
 
 CI (`.github/workflows/ci.yml`) menjalankan `detect-secrets` pada setiap PR meskipun pre-commit di-skip (`--no-verify`).
 
-## 4. Filter-repo history — TIDAK DIPERLUKAN
+## 4. Filter-repo history — DILAKUKAN 2026-10-23 (koreksi catatan lama)
 
-Audit `git log --all -S "REDACTED_OPENWEATHER_KEY"` menunjukkan `OPENWEATHER_API_KEY` real TIDAK pernah masuk history apapun (`.env` selalu di-gitignore sejak commit pertama). Jadi **`git filter-repo` tidak diperlukan**. Jika engineer menemukan kebocoran baru, langkah:
+> **Koreksi**: catatan versi lama di section ini salah — `OPENWEATHER_API_KEY` real
+> justru pernah masuk history sebagai "test key" di `tests/test_config.py`
+> (commit era 2026-07-25) dan ter-copy ke catatan audit ini sendiri. GitHub
+> secret-scanning menolak push branch karena itu.
+
+Purge yang sudah dilakukan 2026-10-23:
+
+```bash
+# 1. Backup lokal: git branch backup/pre-secret-purge
+# 2. Ganti literal key dengan token REDACTED di seluruh commit cabang
+#    (git filter-branch --tree-filter 'sed -i s/<key>/REDACTED/g' <range>)
+# 3. Push ulang branch.
+```
+
+**Wajib**: rotasi key tersebut di dashboard OpenWeatherMap — ia sudah pernah
+berada di plaintext lokal dan hampir ter-push. Jika engineer menemukan
+kebocoran baru, langkah:
 
 ```powershell
 # 1. Rotasi key di provider (OpenWeatherMap/GCP) SEBELUM rewrite history.
