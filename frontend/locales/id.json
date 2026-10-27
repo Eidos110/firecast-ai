@@ -1,24 +1,14 @@
 {
   "app_title": "FireCast",
   "app_subtitle": "Sistem Prediksi Risiko Kebakaran Real-Time",
-  "tab_risk_prediction": "Prediksi Risiko",
-  "tab_historical_analysis": "Analisis Historis",
-  "tab_batch_prediction": "Prediksi Batch",
-  "tab_settings": "Pengaturan",
   "map_title": "Peta Interaktif",
   "map_error": "Error peta",
   "map_refresh_tip": "Silakan refresh halaman jika peta tidak muncul.",
   "sidebar_params": "Parameter Prediksi",
   "sidebar_error": "Error sidebar",
   "btn_run_prediction": "JALANKAN PREDIKSI",
-  "prediction_success": "Prediksi berhasil!",
   "prediction_failed": "Prediksi gagal",
-  "results_title": "Hasil Prediksi",
   "results_error": "Error menampilkan hasil",
-  "export_prediction": "Ekspor Prediksi",
-  "download_json": "Unduh JSON",
-  "download_csv": "Unduh CSV",
-  "download_report": "Unduh Laporan",
   "weather_title": "Informasi Cuaca",
   "weather_error": "Error menampilkan cuaca",
   "historical_title": "Analisis Data Kebakaran Historis",
@@ -37,7 +27,6 @@
   "download_stats": "Statistik Umum (JSON)",
   "batch_title": "Prediksi Batch - Unggah CSV",
   "batch_caption": "Unggah CSV dengan data cuaca dan lokasi untuk menjalankan prediksi risiko kebakaran pada beberapa lokasi sekaligus.",
-  "download_template": "Unduh Template CSV",
   "choose_csv": "Pilih file CSV",
   "csv_required_cols": "Kolom yang diperlukan",
   "missing_cols": "Kolom wajib tidak ada",
@@ -54,15 +43,10 @@
   "batch_done": "Prediksi batch selesai",
   "settings_title": "Pengaturan Sistem",
   "settings_model_config": "Konfigurasi Model",
-  "model_type": "Tipe Model",
   "model_type_fast": "Cepat (Real-time)",
   "model_type_accurate": "Akurat (Komprehensif)",
-  "model_type_help": "Cepat: Respons cepat untuk situasi darurat. Akurat: Analisis mendalam untuk perencanaan.",
-  "risk_tolerance": "Toleransi Risiko (%)",
-  "risk_tolerance_help": "Rendah = sedikit alarm palsu, Tinggi = deteksi lebih sensitif",
   "settings_data_config": "Konfigurasi Data",
   "enable_realtime_weather": "Aktifkan Cuaca Real-time",
-  "realtime_weather_help": "Ambil data cuaca langsung dari API. Nonaktifkan untuk menggunakan nilai sidebar.",
   "enable_whatif": "Aktifkan Analisis What-if",
   "whatif_help": "Tampilkan kontrol skenario what-if di sidebar",
   "settings_api": "Konfigurasi API",
@@ -74,7 +58,6 @@
   "demo_mode": "Berjalan dalam Mode Demo",
   "demo_mode_tip": "Model tidak ditemukan atau gagal dimuat. Menggunakan prediksi simulasi.",
   "model_loaded": "dimuat",
-  "language": "Bahasa",
   "demo_banner": "MODE DEMO - Berjalan dengan data simulasi. Konfigurasi API keys di file .env untuk prediksi nyata.",
   "demo_weather": "Menggunakan data cuaca demo. Konfigurasi OPENWEATHER_API_KEY untuk data nyata.",
   "realtime_disabled": "Cuaca real-time dinonaktifkan. Menggunakan nilai sidebar.",
@@ -186,5 +169,230 @@
   "whatif_analysis": "Aktifkan Analisis What-if",
   "whatif_analysis_help": "Tampilkan kontrol skenario what-if di sidebar",
   "language_setting": "Bahasa",
-  "language": "Bahasa"
+  "language": "Bahasa",
+  "spa": {
+    "brand": "Firecast",
+    "brand_version": "v4.0",
+    "pill": {
+      "model": "model",
+      "run": "run",
+      "epsg": "EPSG",
+      "last_run": "last-run",
+      "last_run_dash": "—"
+    },
+    "status": {
+      "connecting": "menghubungkan…",
+      "online": "online",
+      "offline": "offline",
+      "label": "Inference API"
+    },
+    "region": {
+      "label": "Wilayah",
+      "select_label": "Wilayah aktif"
+    },
+    "lang_toggle": {
+      "label": "Bahasa"
+    },
+    "theme_toggle": {
+      "label": "Ganti tema (gelap / terang / otomatis)"
+    },
+    "user": {
+      "avatar_label": "Profil pengguna — klik untuk mengatur nama tampilan",
+      "prompt_name": "Nama tampilan:",
+      "initials": "FC"
+    },
+    "nav": {
+      "toggle_left": "Buka/tutup sidebar konfigurasi",
+      "toggle_right": "Buka/tutup panel diagnostik"
+    },
+    "toast": {
+      "predict_success": "Prediksi selesai — P(kebakaran) = {{score}}",
+      "predict_failed": "Prediksi gagal: {{msg}} — menampilkan fallback demo",
+      "model_activated": "Model {{name}} v{{version}} diaktifkan",
+      "model_activate_failed": "Aktivasi model gagal: {{msg}}"
+    },
+    "palette": {
+      "label": "Palet perintah",
+      "placeholder": "Ketik perintah atau cari…",
+      "empty": "Tidak ada perintah yang cocok",
+      "toggle_layer": "Aktif/matikan layer",
+      "cycle_theme": "Ganti tema (gelap / terang / otomatis)",
+      "switch_language": "Ganti bahasa"
+    },
+    "layers": {
+      "title": "Layer",
+      "active_count": "{{active}}/{{total}} aktif",
+      "opacity": "Opasitas",
+      "toggle": "Aktif/Matikan {{label}}",
+      "layer_opacity": "Opasitas layer"
+    },
+    "legend": {
+      "title": "Legenda Risiko",
+      "rendah": "Rendah",
+      "sedang": "Sedang",
+      "tinggi": "Tinggi",
+      "sangat_tinggi": "Sangat Tinggi"
+    },
+    "metrics": {
+      "live_metrics": "Metrik Langsung",
+      "api_log": "Log API",
+      "p_fire": "P(kebakaran)",
+      "p_fire_window": "P(kebakaran) 24 jam ke depan",
+      "experimental_badge": "Model eksperimental",
+      "experimental_badge_hint": "Validasi offline model stacking masih memiliki masalah metodologi terbuka (fitur temporal dibangun lintas lokasi, early-stopping GRU pada data uji). Perlakukan probabilitas ini sebagai indikatif, bukan operasional — sampai retraining selesai.",
+      "confidence": "Kepercayaan",
+      "auc_roc": "AUC-ROC",
+      "drift_ks": "Drift KS",
+      "shap_explanation": "Penjelasan SHAP",
+      "shap_top_features_label": "Pentingnya fitur teratas (SHAP)",
+      "raw_json": "JSON Mentah",
+      "raw_api_response": "Respons API Mentah",
+      "diagnostic_panel_label": "Panel diagnostik prediksi"
+    },
+    "model": {
+      "label": "Model",
+      "forecast_horizon": "Horizon Prakiraan",
+      "confidence_threshold": "Ambang Kepercayaan",
+      "run_inference": "Jalankan Inference",
+      "run_inference_busy": "Menjalankan…",
+      "set_active_server": "Set aktif (server)",
+      "no_cell_selected": "Klik peta untuk memilih sel terlebih dahulu",
+      "selected_cell": "Terpilih: {{lat}}, {{lon}}",
+      "ensemble": "Ensemble (CNN+LGBM)",
+      "stacking": "Stacking (LGB+XGB+Meta)",
+      "causal_gru": "Causal GRU",
+      "fallback": {
+        "new": "Ensemble (Stacking)",
+        "legacy": "CNN + LGBM (Legacy)"
+      }
+    },
+    "timeline": {
+      "label": "Slider horizon prakiraan",
+      "now": "Sekarang",
+      "play": "Play",
+      "pause": "Pause",
+      "new_run": "ID run baru",
+      "export_json": "Ekspor JSON run"
+    },
+    "filters": {
+      "risk_level": "Tingkat Risiko",
+      "region": "Region",
+      "date_range": "Rentang Tanggal",
+      "start_date": "Tanggal mulai",
+      "end_date": "Tanggal akhir",
+      "loading_locations": "Memuat lokasi…",
+      "region_count": "{{count}} entri region",
+      "locations_unavailable": "Lokasi tidak tersedia — menampilkan daftar cadangan",
+      "region_all": "Semua Indonesia",
+      "risk_level_options": {
+        "all": "Semua",
+        "ge_moderate": "≥ Sedang",
+        "ge_high": "≥ Tinggi",
+        "extreme_only": "Hanya Ekstrem"
+      }
+    },
+    "map": {
+      "aria_label": "Panel peta",
+      "aria_label_interactive": "Peta Interaktif FireCast",
+      "error": {
+        "heading": "Error Peta",
+        "reload_button": "Muat Ulang"
+      },
+      "compass": {
+        "north": "U",
+        "label": "Kompas"
+      },
+      "coord_readout": {
+        "label": "Koordinat",
+        "epsg": "EPSG:{{code}}",
+        "no_cell": "tidak ada sel dipilih"
+      },
+      "zoom": {
+        "label": "Tingkat zoom"
+      },
+      "aoi": {
+        "drawn": "AOI digambar ({{n}} titik)",
+        "updated": "AOI diperbarui ({{n}} titik)",
+        "deleted": "AOI dihapus",
+        "draw_tip": "Gambar poligon di peta untuk menjalankan prediksi batch",
+        "log_drawn": "AOI digambar — siap untuk prediksi batch",
+        "log_updated": "AOI diedit",
+        "log_deleted": "AOI dihapus",
+        "progress_label": "Memprediksi batch AOI…"
+      },
+      "tile": {
+        "ready": "Ubin peta dimuat",
+        "failing": "Pemuatan ubin gagal",
+        "fallback": "Penyedia ubin diganti: {{from}} → {{to}}",
+        "all_failed": "Semua penyedia ubin peta gagal (cek jaringan/CORS).",
+        "reload": "Muat Ulang"
+      },
+      "toast": {
+        "aoi_drawn": "AOI digambar — {{n}} titik. Jalankan prediksi batch dari sidebar.",
+        "aoi_updated": "AOI diperbarui",
+        "aoi_deleted": "AOI dihapus"
+      },
+      "measurement": {
+        "total_km": "Jarak: {{km}} km"
+      }
+    },
+    "trend": {
+      "chart_label": "Tren risiko-kebakaran 7 hari",
+      "loading": "mengambil tren…",
+      "axis_p10": "pita p10",
+      "axis_p50": "median (p50)",
+      "axis_p90": "pita p90",
+      "threshold_label": "ambang",
+      "tooltip_p_fire": "P(kebakaran) = {{value}} ({{tier}})",
+      "tooltip_ci": "KI: {{p10}} – {{p90}}"
+    },
+    "api_log": {
+      "empty": "Log API kosong",
+      "aria_label": "Log API",
+      "no_inference_run": "Belum ada inference. Klik peta → Jalankan Inference.",
+      "level_ok": "OK",
+      "level_warn": "WARN",
+      "level_err": "GAGAL",
+      "ok": "ok",
+      "warn": "peringat",
+      "err": "gagal",
+      "demo": "demo"
+    },
+    "api_key": {
+      "title": "Kunci API",
+      "label": "X-API-Key",
+      "placeholder": "tempel rahasia server di sini",
+      "save": "Simpan",
+      "saved": "Tersimpan",
+      "clear": "Hapus",
+      "reveal": "Tampilkan kunci",
+      "hide": "Sembunyikan kunci",
+      "status_set": "Kunci diset — endpoint gated terbuka.",
+      "status_unset": "Tidak ada kunci — /predict dan /api/models/* akan 401.",
+      "log_saved": "Kunci API tersimpan — endpoint gated terbuka.",
+      "log_cleared": "Kunci API dihapus — endpoint gated kini akan 401.",
+      "log_empty": "Tidak bisa menyimpan kunci API kosong."
+    },
+    "error_boundary": {
+      "heading": "Terjadi kesalahan",
+      "description": "Terjadi error tak terduga. Silakan muat ulang halaman.",
+      "reload": "Muat Ulang Halaman"
+    },
+    "error": {
+      "unauthorized": "Tidak berizin: periksa API key",
+      "validation": "Kesalahan validasi: body permintaan ditolak (422)",
+      "not_found": "Sumber daya tidak ditemukan (404)",
+      "rate_limited": "Batas laju terlampaui — pelankan permintaan",
+      "server": "Kesalahan server — periksa log backend"
+    },
+    "mode": {
+      "label": "Mode persona",
+      "engineer": "Engineer",
+      "analyst": "Analis",
+      "demo": "Demo",
+      "engineer_hint": "Konsol engineer penuh — SHAP, raw JSON, command palette",
+      "analyst_hint": "Konsol analis — fokus tabel, unduh CSV, tanpa dev tools",
+      "demo_hint": "Walkthrough demo — baca-saja, kunci API & pemilih model disembunyikan"
+    }
+  }
 }

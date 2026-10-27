@@ -1,0 +1,58 @@
+# =============================================================================
+# FireCast pre-commit hooks — Fase 5 quality gate.
+# Install:  pip install pre-commit && pre-commit install
+# Manual:   pre-commit run --all-files
+# Skip:     git commit --no-verify
+# =============================================================================
+repos:
+  # Python — ruff (lint + format) replaces flake8/isort/pyupgrade.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: '^(src|tests)/.*\.py$|^main\.py$|^start_api\.py$'
+      - id: ruff-format
+        files: '^(src|tests)/.*\.py$|^main\.py$|^start_api\.py$'
+
+  # Black for opinionated formatting (kept alongside ruff-format for diff
+  # stability against already-formatted files; the CI runs black --check).
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+        files: '^(src|tests)/.*\.py$|^main\.py$|^start_api\.py$'
+
+  # Strip notebook outputs before commit (keeps `notebooks/` diffable).
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout
+        files: '^notebooks/.*\.ipynb$'
+
+  # Guard against accidentally committing secrets / large model artifacts.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+            .*\.pkl|.*\.pth|.*\.pt|.*\.joblib|
+            add_new_model/.*|
+            models/.*|
+            .*lock\.json
+          )$
+
+  # Keep trailing-whitespace / EOF / large-file hygiene.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+        exclude: '\.md$'
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=2048']

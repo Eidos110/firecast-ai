@@ -1,10 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-:root {
+:root,
+[data-theme='dark'] {
   /* Typography scale */
   --font-family-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   --font-family-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  
+
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
@@ -12,41 +13,152 @@
   --font-size-xl: 1.25rem;
   --font-size-2xl: 1.5rem;
   --font-size-3xl: 1.875rem;
-  
+  --font-size-4xl: 2.25rem;
+
   --line-height-tight: 1.2;
   --line-height-normal: 1.5;
   --line-height-relaxed: 1.75;
-  
+
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  
-  /* Colors - Light theme as default */
-  --color-bg: #ffffff;
-  --color-surface: #f8fafc;
-  --color-text-primary: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-muted: #94a3b8;
-  --color-border: #e2e8f0;
-  --color-accent: #0ea5e9;
-  --color-accent-hover: #0284c7;
-  --color-error: #ef4444;
+
+  /* Dark theme palette (default) — mirrors frontend/themes/tokens.json */
+  --color-bg: #0f172a;
+  --color-background: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-hover: #334155;
+  --color-text: #f1f5f9;
+  --color-text-primary: #f1f5f9;        /* alias for legacy components */
+  --color-text-secondary: #cbd5e1;       /* legacy alias */
+  /* WCAG AAA contrast (ROADMAP §3-W4): dark-mode muted text must reach ≥7:1
+   * on the bg (#0f172a). Previous value #94a3b8 only measured ~4.5:1 —
+   * borderline AA — which was hard to read on the RightDiagnostic dense monospace
+   * tile. #b2bed6 measures ≈ 8.4:1 on the same background. */
+  --color-text-muted: #b2bed6;
+  --color-border: #334155;
+  --color-primary: #ef4444;
+  --color-accent: #f59e0b;
+  --color-accent-hover: #d97706;
+  --color-info: #3b82f6;
+  --color-error: #dc2626;
   --color-success: #22c55e;
-  --color-warning: #f59e0b;
-  
+  --color-warning: #eab308;
+
+  /* Risk tier colors (single source — mirrors tokens.ts & theme.py) */
+  --risk-rendah: #22c55e;
+  --risk-sedang: #fb923c;
+  --risk-tinggi: #ef4444;
+  --risk-sangat-tinggi: #7f1d1d;
+  --risk-bg-rendah: rgba(34, 197, 94, 0.1);
+  --risk-bg-sedang: rgba(251, 146, 60, 0.1);
+  --risk-bg-tinggi: rgba(239, 68, 68, 0.1);
+  --risk-bg-sangat-tinggi: rgba(127, 29, 29, 0.15);
+
   /* Shadows & radius */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.15), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-card-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.25), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
-  
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+
+  /* Accessibility */
+  --a11y-focus-ring: 0 0 0 3px var(--color-accent);
+  --a11y-touch-target-min: 44px;
+
+  /* Motion */
+  --motion-duration-fast: 150ms;
+  --motion-duration-normal: 250ms;
+  --motion-easing: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* z-index */
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 1000;
+  --z-command-palette: 1100;
+  --z-toast: 9000;
+
   /* Map specific */
-  --map-border: #cbd5e1;
+  --map-border: #334155;
   --map-radius: 12px;
 }
+
+[data-theme='light'] {
+  --color-bg: #f8fafc;
+  --color-background: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-text: #0f172a;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-muted: #64748b;
+  --color-border: #e2e8f0;
+  --map-border: #cbd5e1;
+}
+
+:root {
+  /* System-font fallback when Google Fonts is blocked (HF Spaces sandbox). */
+  font-family: var(--font-family-primary);
+}
+
+/* ── Engineer-console animations ─────────────────────────────────────── */
+@keyframes fc-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Skeleton placeholder for metric cards while /predict is in-flight
+ * (ROADMAP §3-L). Two-layer gradient shimmer — light band sweeps left-to-right
+ * on a muted base. ``fc-skeleton-shimmer`` drives the sweep. */
+.fc-skeleton {
+  display: block;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-hover) 25%,
+    var(--color-border) 50%,
+    var(--color-surface-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: fc-skeleton-shimmer 1.4s ease-in-out infinite;
+  /* Reserve ink so the card does not collapse when value is empty. */
+  min-height: 1em;
+}
+
+/* Sticky indeterminate progress-bar strip used by MapOverlays (ROADMAP
+ * §3-W2). The bar shows a thin primary-colored band that slides left→right
+ * indefinitely while /predict/aoi is in flight. It's pinned to the top of
+ * the map area so it never overlays the polygon being edited. */
+@keyframes fc-progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(400%); }
+}
+
+/* Used by Header's SystemStatus LED. Dual-mode glow so the LED is visible
+ * against both --color-surface (dark) and white surface (light). */
+@keyframes fc-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
+  50%      { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+}
+
+/* Reduced-motion users still get a working LED — animation is flattened to a
+ * static non-pulsing state by the global @media (prefers-reduced-motion: reduce)
+ * block at the bottom of this file. */
 
 /* Base reset */
 *, *::before, *::after {
@@ -189,4 +301,364 @@ body {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* WCAG 2.4.7 — visible focus ring for keyboard users */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--a11y-focus-ring);
+}
+
+/* WCAG 2.3.3 — respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: var(--motion-duration-fast) !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: var(--motion-duration-fast) !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Mobile-first touch target sizes (Fase 4) — min 44x44 per WCAG 2.5.5.
+ *
+ * Bug fix 2026-07-31: the universal ``button`` selector was forcing every
+ * button in the left sidebar (layer rows, reveal toggle, Save/Clear,
+ * Run Inference) to 44px tall, which pushed the sidebar content far past
+ * the viewport height — the engineer couldn't see all layers without
+ * scrolling far. Sidebars & dialogs are pointer-driven, not touch, so the
+ * WCAG 2.5.5 minimum only applies to primary navigation & form submit
+ * buttons. ``.fc-btn-compact`` and ``[data-compact='true']`` opt out of
+ * the 44px minimum via a more specific selector so the sidebar rows stay
+ * tight. ``.fc-btn-primary`` and ``.fc-btn-secondary`` carry their own
+ * ``min-height: 32px`` value and the sidebar variants are paired with
+ * ``.fc-btn-compact`` to win against the universal rule.
+ */
+button:not(.fc-btn-compact):not([data-compact='true']):not(.fc-btn-primary):not(.fc-btn-secondary) {
+  min-height: var(--a11y-touch-target-min);
+  min-width: var(--a11y-touch-target-min);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fc-btn-compact, [data-compact='true'] {
+  min-height: auto;
+  min-width: auto;
+}
+
+/* ── Sidebar shared class styles (Fase 4 gap closure) ───────────────
+ * Components used to duplicate these inline. Now centralised so the
+ * sidebar lays out compactly: tighter row heights, consistent gaps, no
+ * per-component drift. classNames are still paired with inline styles in
+ * the components so existing look-and-feel is generally preserved but
+ * defaults can be tightened here without touching each call site.
+ */
+.fc-section {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.fc-section:last-child {
+  border-bottom: none;
+}
+.fc-section-title {
+  margin: 0 0 6px 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.fc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.fc-field-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fc-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-primary);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.fc-input:focus {
+  border-color: var(--color-accent);
+}
+.fc-mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* Button variants — destructive/non-primary de-emphasised as compact
+ * while keeping a11y labels discoverable on hover/focus. */
+.fc-btn-primary {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 6px 12px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: #fff;
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.fc-btn-primary:hover { filter: brightness(1.1); }
+.fc-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.fc-btn-secondary {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 5px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.fc-btn-secondary:hover { filter: brightness(1.15); }
+.fc-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Range slider (used by layer opacity & confidence threshold). */
+.fc-range {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  background: var(--color-border);
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+.fc-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-surface);
+  cursor: pointer;
+}
+.fc-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-surface);
+  cursor: pointer;
+}
+
+/* Toggle pill — adjust positioning is intentional to land the dot
+ * centered within the new 14px height pill (was 16px). */
+.fc-toggle {
+  width: 28px;
+  height: 14px;
+  border-radius: 7px;
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-block;
+}
+
+@media (max-width: 768px) {
+  .fc-sidebar-nav {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    z-index: var(--z-sticky);
+    transform: translateX(-100%);
+    transition: transform var(--motion-duration-normal) var(--motion-easing);
+  }
+  .fc-sidebar-nav.fc-sidebar-nav--open {
+    transform: translateX(0);
+  }
+}
+
+/* ── Toast notifications ────────────────────────────────────────────── */
+.fc-toast-viewport {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 32px));
+  pointer-events: none; /* container lets clicks through; items re-enable */
+}
+.fc-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 10px 12px;
+  font-size: var(--font-size-sm);
+  animation: fc-toast-in 180ms var(--motion-easing);
+}
+.fc-toast-icon {
+  font-weight: var(--font-weight-bold);
+  line-height: 1.2;
+  flex: 0 0 auto;
+}
+.fc-toast-message {
+  flex: 1 1 auto;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.fc-toast-close {
+  flex: 0 0 auto;
+  min-width: 24px;
+  min-height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.fc-toast-close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+@keyframes fc-toast-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Command palette ────────────────────────────────────────────────── */
+.fc-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: var(--z-command-palette);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.fc-palette {
+  width: min(560px, calc(100vw - 32px));
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.fc-palette-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family-primary);
+  color: var(--color-text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  outline: none;
+  box-sizing: border-box;
+}
+.fc-palette-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.fc-palette-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.fc-palette-item[aria-selected='true'] {
+  background: var(--color-surface-hover);
+}
+.fc-palette-hint {
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+.fc-palette-empty {
+  padding: 16px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+/* ── Mobile drawers & hamburger buttons ─────────────────────────────── */
+.fc-hamburger {
+  display: none; /* desktop: columns are always visible */
+}
+@media (max-width: 900px) {
+  .fc-hamburger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0 8px;
+    background: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .fc-drawer {
+    position: fixed;
+    top: 48px;
+    bottom: 0;
+    z-index: var(--z-modal);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-lg);
+    transition: transform var(--motion-duration-normal) var(--motion-easing);
+    overflow-y: auto;
+  }
+  .fc-drawer--left {
+    left: 0;
+    width: min(300px, 85vw);
+    border-right: 1px solid var(--color-border);
+  }
+  .fc-drawer--left:not(.fc-drawer--open) { transform: translateX(-100%); }
+  .fc-drawer--right {
+    right: 0;
+    width: min(340px, 90vw);
+    border-left: 1px solid var(--color-border);
+  }
+  .fc-drawer--right:not(.fc-drawer--open) { transform: translateX(100%); }
+  .fc-drawer-backdrop {
+    position: fixed;
+    inset: 48px 0 0 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: calc(var(--z-modal) - 1);
+  }
 }

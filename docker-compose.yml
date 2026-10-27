@@ -1,118 +1,56 @@
-# FireCast Docker Compose Configuration
 # =============================================================================
-# Services:
-#   frontend  - Streamlit UI (firecast-frontend target)
-#   api       - FastAPI backend
-#   dev       - Combined local dev environment with live code mounts
-#   nginx     - Reverse proxy + SSL (production profile only)
+# FireCast Docker Compose Configuration (post-React-SPA migration, TAHAP E)
+# =============================================================================
+# Single-process model: one uvicorn worker serves the FastAPI API AND the
+# compiled React SPA from /app/frontend_react/build. No separate frontend
+# / api / nginx tier is needed in dev unless the operator wants TLS.
 #
 # Usage:
-#   docker-compose up -d              # frontend + api
-#   docker-compose up -d frontend     # frontend only
-#   docker-compose up -d api          # api only
-#   docker-compose up -d dev          # dev (code hot-mount)
-#   docker-compose --profile production up -d  # all incl. nginx
+#   docker compose up -d            # build + run the all-in-one service
+#   docker compose up -d --build    # force rebuild (e.g. after SPA src change)
+#   docker compose logs -f firecast
+#   docker compose down
+#
+# For HTTPS / reverse-proxy in production add the `nginx` profile (see below).
 # =============================================================================
 
-version: "3.8"
-
 services:
-  # ── Frontend (Streamlit) ──────────────────────────────────────────────
-  frontend:
+  firecast:
     build:
       context: .
-      target: frontend
-    container_name: firecast-frontend
+      target: base
+    container_name: firecast
     ports:
-      - "8501:8501"
+      - "7860:7860"
     environment:
       - APP_ENV=production
       - DEBUG=false
       - LOG_LEVEL=WARNING
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
-      - ENABLE_DEMO_MODE=false
-      - API_BASE_URL=http://api:8000
-    env_file:
-      - .env
-    volumes:
-      # Mount models read-only so updates on host are reflected without rebuild
-      - ./models:/app/models:ro
-      - ./data:/app/data:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    depends_on:
-      api:
-        condition: service_healthy
-    networks:
-      - firecast
-
-  # ── API (FastAPI) ────────────────────────────────────────────────────
-  api:
-    build:
-      context: .
-      target: api
-    container_name: firecast-api
-    ports:
-      - "8000:8000"
-    environment:
-      - APP_ENV=production
-      - DEBUG=false
-      - LOG_LEVEL=WARNING
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - ENABLE_DEMO_MODE=false
+      - HOST=0.0.0.0
+      - PORT=7860
       - ML_DEVICE=cpu
     env_file:
       - .env
     volumes:
+      # Mount models + data read-only so host updates are reflected without rebuild.
       - ./models:/app/models:ro
       - ./data:/app/data:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 40s
     networks:
       - firecast
 
-  # ── Development (Frontend + API with live code mounts) ──────────────────
-  dev:
-    build:
-      context: .
-      target: development
-    container_name: firecast-dev
-    ports:
-      - "8501:8501"
-      - "8000:8000"
-    environment:
-      - APP_ENV=development
-      - DEBUG=true
-      - LOG_LEVEL=DEBUG
-    env_file:
-      - .env
-    volumes:
-      # Mount the full project tree for live code editing + hot-reload
-      - ./:/app
-      # Exclude node_modules / venv from host mounts to avoid conflicts
-      - /app/venv
-      - /app/frontend_react/node_modules
-    command: python launch_prototype.py --mode both
-    restart: "no"
-    networks:
-      - firecast
-
-  # ── Nginx Reverse Proxy (production profile) ──────────────────────────
+  # Optional HTTPS reverse proxy (use only with --profile production)
   nginx:
     image: nginx:1.25-alpine
     container_name: firecast-nginx
+    profiles:
+      - production
     ports:
       - "80:80"
       - "443:443"
@@ -122,18 +60,10 @@ services:
       - ./nginx/www:/var/www/html:ro
     restart: unless-stopped
     depends_on:
-      - frontend
-      - api
+      - firecast
     networks:
       - firecast
-    profiles:
-      - production
 
-# ── Networks ─────────────────────────────────────────────────────────────
 networks:
   firecast:
     driver: bridge
-
-# ── Volumes (optional persistent data) ───────────────────────────────────
-volumes:
-  firecast-models:

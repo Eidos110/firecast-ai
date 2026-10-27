@@ -7,23 +7,23 @@ Uses SQLModel for simple ORM patterns.
 
 from __future__ import annotations
 
-import os
+import contextlib
 import logging
-from datetime import datetime
-from typing import Optional
+import os
+from datetime import datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Try to import sqlmodel
 try:
-    from sqlmodel import Field, SQLModel, create_engine, Session, select, update
+    from sqlmodel import Field, Session, SQLModel, create_engine, select
 except ImportError:
     Field = None
     SQLModel = None
     create_engine = None
     Session = None
     select = None
-    update = None
 
 # Database URL from environment
 DATABASE_URL = os.environ.get(
@@ -37,19 +37,36 @@ _initialized = False
 
 
 def get_engine():
-    """Get or create the database engine."""
+    """Get or create the database engine.
+
+    Detects the dialect from ``DATABASE_URL``: SQLite backends use the
+    default ``StaticPool``-ish single-connection semantics and reject
+    ``pool_size`` / ``max_overflow`` (these kwargs are only valid for
+    PostgreSQL/MySQL connection pools).
+    """
     global _engine
     if _engine is None and create_engine is not None:
-        db_path = DATABASE_URL.replace("sqlite:///", "")
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        # Configure connection pooling and health checks
-        _engine = create_engine(
-            DATABASE_URL,
-            echo=False,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,  # Verify connections before use
-        )
+        is_sqlite = DATABASE_URL.startswith("sqlite")
+        if is_sqlite:
+            # SQLite: ensure parent dir exists, use check_same_thread=False
+            # so the engine can be shared across request coroutines.
+            db_path = DATABASE_URL.replace("sqlite:///", "")
+            with contextlib.suppress(OSError):
+                os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            _engine = create_engine(
+                DATABASE_URL,
+                echo=False,
+                connect_args={"check_same_thread": False},
+            )
+        else:
+            # PostgreSQL / MySQL: pool size + overflow are meaningful here.
+            _engine = create_engine(
+                DATABASE_URL,
+                echo=False,
+                pool_size=5,
+                max_overflow=10,
+                pool_pre_ping=True,  # Verify connections before use
+            )
     return _engine
 
 
@@ -78,7 +95,7 @@ if SQLModel is not None:
         __tablename__ = "predictions"
         __table_args__ = {"extend_existing": True}
 
-        id: Optional[int] = Field(default=None, primary_key=True)
+        id: int | None = Field(default=None, primary_key=True)
         latitude: float = Field(index=True)
         longitude: float = Field(index=True)
         temperature: float
@@ -90,8 +107,8 @@ if SQLModel is not None:
         overall_risk: float
         risk_level: str
         confidence: float = Field(default=0)
-        cnn_probability: Optional[float] = Field(default=None)
-        lgbm_probability: Optional[float] = Field(default=None)
+        cnn_probability: float | None = Field(default=None)
+        lgbm_probability: float | None = Field(default=None)
         affected_area: float = Field(default=0)
         max_spread_distance: float = Field(default=0)
         model_type: str = Field(default="DEMO")
@@ -103,11 +120,11 @@ if SQLModel is not None:
         __tablename__ = "locations"
         __table_args__ = {"extend_existing": True}
 
-        id: Optional[int] = Field(default=None, primary_key=True)
+        id: int | None = Field(default=None, primary_key=True)
         name: str = Field(index=True)
         latitude: float
         longitude: float
-        description: Optional[str] = Field(default=None)
+        description: str | None = Field(default=None)
         created_at: datetime = Field(default_factory=datetime.now)
 
     class ModelVersion(SQLModel, table=True):
@@ -116,15 +133,15 @@ if SQLModel is not None:
         __tablename__ = "model_versions"
         __table_args__ = {"extend_existing": True}
 
-        id: Optional[int] = Field(default=None, primary_key=True)
+        id: int | None = Field(default=None, primary_key=True)
         model_name: str = Field(index=True)
         version_string: str = Field(index=True)
         file_path: str = Field(index=True)
-        model_metadata: Optional[str] = Field(default=None)
-        performance_metrics: Optional[str] = Field(default=None)
+        model_metadata: str | None = Field(default=None)
+        performance_metrics: str | None = Field(default=None)
         is_active: bool = Field(default=True)
         created_at: datetime = Field(default_factory=datetime.now)
-        deployed_at: Optional[datetime] = Field(default=None)
+        deployed_at: datetime | None = Field(default=None)
 
 else:
     # Dummy classes for type hints when sqlmodel is not available
@@ -150,12 +167,12 @@ def log_prediction(
     rainfall: float = 0,
     vegetation_type: str = "Savana",
     confidence: float = 0,
-    cnn_probability: Optional[float] = None,
-    lgbm_probability: Optional[float] = None,
+    cnn_probability: float | None = None,
+    lgbm_probability: float | None = None,
     affected_area: float = 0,
     max_spread_distance: float = 0,
     model_name: str = "DEMO",
-) -> Optional[int]:
+) -> int | None:
     """Log a prediction to the database."""
     if SQLModel is None:
         logger.debug("sqlmodel not available, skipping prediction log")
@@ -200,7 +217,7 @@ def log_prediction(
         return None
 
 
-def get_predictions(limit: int = 50, risk_level: Optional[str] = None) -> list:
+def get_predictions(limit: int = 50, risk_level: str | None = None) -> list:
     """Get recent predictions from database."""
     if SQLModel is None:
         return []
@@ -211,9 +228,7 @@ def get_predictions(limit: int = 50, risk_level: Optional[str] = None) -> list:
             return []
 
         with Session(engine) as session:
-            stmt = (
-                select(Prediction).order_by(Prediction.created_at.desc()).limit(limit)
-            )
+            stmt = select(Prediction).order_by(Prediction.created_at.desc()).limit(limit)
             if risk_level:
                 stmt = stmt.where(Prediction.risk_level == risk_level)
             results = session.exec(stmt).all()
@@ -228,8 +243,8 @@ def save_location(
     name: str,
     latitude: float,
     longitude: float,
-    description: Optional[str] = None,
-) -> Optional[int]:
+    description: str | None = None,
+) -> int | None:
     """Save a location to the database."""
     if SQLModel is None:
         return None
@@ -278,6 +293,122 @@ def get_saved_locations() -> list:
     except Exception as e:
         logger.warning("Failed to get saved locations: %s", e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Retention policy (Audit priority: Database & Persistence)
+# ---------------------------------------------------------------------------
+# The ``Prediction`` table grows unbounded in long-lived deployments (HF
+# Spaces persistent disk or a local laptop). Compact it via an
+# explicit purge call rather than auto-VACUUM, which would block the SQLite
+# event loop on large tables. The default retention is 30 days; override via
+#   FIRECAST_PREDICTION_RETENTION_DAYS=14  (env)
+# or pass ``days`` explicitly. The function returns a dict suitable for admin
+# telemetry. Backend-agnostic: noop bila sqlmodel/sqlite missing.
+#
+# Invoke from a CLI/admin script or a platform cron; there is no scheduler
+# wired into the API process by default.
+# ---------------------------------------------------------------------------
+
+
+def _default_retention_days() -> int:
+    """Read retention policy from env (portable, backend-agnostic)."""
+    raw = os.environ.get("FIRECAST_PREDICTION_RETENTION_DAYS")
+    if not raw:
+        return 30
+    try:
+        days = int(raw)
+        return days if days > 0 else 30
+    except ValueError:
+        logger.warning("Invalid FIRECAST_PREDICTION_RETENTION_DAYS=%r, fallback to 30", raw)
+        return 30
+
+
+def purge_old_predictions(days: int | None = None) -> dict[str, Any]:
+    """Delete Prediction rows older than ``days`` days (default env override).
+
+    Returns:
+        {"deleted": int, "retained_after": int, "days": int} on success.
+        {"enabled": False, ...} bila sqlmodel missing or engine unavailable.
+    """
+    if SQLModel is None:
+        return {"enabled": False, "deleted": 0, "reason": "sqlmodel unavailable"}
+
+    retention_days = days if days is not None else _default_retention_days()
+    cutoff = datetime.now() - timedelta(days=retention_days)
+
+    try:
+        engine = get_engine()
+        if engine is None:
+            return {"enabled": False, "deleted": 0, "reason": "no engine"}
+
+        from sqlalchemy import delete, func
+
+        with Session(engine) as session:
+            # COUNT(*) instead of materialising every row: the table can hold
+            # millions of predictions on a long-lived deployment.
+            count_before = int(session.exec(select(func.count()).select_from(Prediction)).one())
+            session.execute(delete(Prediction).where(Prediction.created_at < cutoff))
+            session.commit()
+            count_after = int(session.exec(select(func.count()).select_from(Prediction)).one())
+
+        # VACUUM cannot run inside a transaction. SQLAlchemy opens one
+        # implicitly unless AUTOCOMMIT is requested, which made the previous
+        # best-effort call fail silently. Only SQLite needs this step.
+        if engine.dialect.name == "sqlite":  # pragma: no cover - dialect branch
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    conn.exec_driver_sql("VACUUM")
+            except Exception as e:  # pragma: no cover - VACUUM is best-effort
+                logger.debug("VACUUM skipped: %s", e)
+
+        logger.info(
+            "purge_old_predictions: deleted %d/%d rows (retention=%d days)",
+            count_before - count_after,
+            count_before,
+            retention_days,
+        )
+        return {
+            "enabled": True,
+            "deleted": count_before - count_after,
+            "retained_after": count_after,
+            "days": retention_days,
+        }
+
+    except Exception as e:
+        logger.warning("purge_old_predictions failed: %s", e)
+        return {"enabled": False, "deleted": 0, "reason": str(e)}
+
+
+def prediction_stats() -> dict[str, Any]:
+    """Return row count + oldest/newest timestamps for the Prediction table."""
+    if SQLModel is None:
+        return {"enabled": False, "rows": 0}
+
+    try:
+        engine = get_engine()
+        if engine is None:
+            return {"enabled": False, "rows": 0, "reason": "no engine"}
+
+        from sqlalchemy import func
+
+        with Session(engine) as session:
+            count, oldest, newest = session.exec(
+                select(
+                    func.count(),
+                    func.min(Prediction.created_at),
+                    func.max(Prediction.created_at),
+                ).select_from(Prediction)
+            ).one()
+            return {
+                "enabled": True,
+                "rows": int(count),
+                "oldest": oldest.isoformat() if oldest else None,
+                "newest": newest.isoformat() if newest else None,
+            }
+    except Exception as e:
+        logger.warning("prediction_stats failed: %s", e)
+        return {"enabled": False, "rows": 0, "reason": str(e)}
 
 
 if __name__ == "__main__":

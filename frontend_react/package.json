@@ -1,33 +1,54 @@
 {
   "name": "firecast-frontend",
   "private": true,
-  "version": "1.0.0",
+  "version": "4.0.0",
   "type": "module",
+  "description": "FireCast React SPA - Engineer Console (v4 layout)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lhci": "lhci autorun",
+    "preview:ci": "vite preview --port 4173 --strictPort --host"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "@tanstack/react-query": "^5.28.0",
+    "i18next": "^23.11.0",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
-    "streamlit-component-lib": "^1.3.0",
-    "@types/leaflet": "^1.9.8",
-    "@types/leaflet-draw": "^1.0.10"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-i18next": "^14.0.5",
+    "recharts": "^2.12.2",
+    "zustand": "^4.5.2"
   },
   "devDependencies": {
+    "@lhci/cli": "^0.13.0",
+    "@testing-library/jest-dom": "^6.1.5",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/leaflet": "^1.9.8",
+    "@types/leaflet-draw": "^1.0.10",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@typescript-eslint/eslint-plugin": "^6.14.0",
     "@typescript-eslint/parser": "^6.14.0",
     "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.18",
     "eslint": "^8.55.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "jsdom": "^24.0.0",
+    "lighthouse": "^11.0.0",
+    "postcss": "^8.4.35",
+    "puppeteer": "^22.0.0",
+    "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vitest": "^1.0.0"
   }
 }

@@ -1,0 +1,37 @@
+{
+  "schema": "v4.2-crosssection",
+  "created_utc": "2026-08-29T18:06:35.601087+00:00",
+  "source_csv": "firecast_data_readymodelling_final_V3.csv",
+  "source_csv_mtime": "2026-08-21T14:38:06.709602",
+  "n_rows": 56222,
+  "n_sites": 56222,
+  "split": {
+    "train": 44977,
+    "val": 5622,
+    "test": 5623
+  },
+  "n_features": 34,
+  "gru_leg": false,
+  "base_models": [
+    "lightgbm",
+    "xgboost"
+  ],
+  "meta": "LogisticRegressionCV(OOF 5-fold, kedua kaki)",
+  "calibration": "isotonic(fit VAL, out_of_bounds=clip)",
+  "threshold": 0.531592249368155,
+  "validation_status": "validated",
+  "metrics": {
+    "val_auc": 0.6567950511151244,
+    "test_auc": 0.841555330693318,
+    "test_pr_auc": 0.8756522965405797,
+    "test_brier": 0.1694688141175089,
+    "test_auc_calibrated": 0.8397926469362063,
+    "test_brier_calibrated": 0.1639160404819437,
+    "test_ece_raw": 0.08531944655881434,
+    "test_ece_calibrated": 0.04226979283840659
+  },
+  "library_versions": {
+    "lightgbm": "4.6.0",
+    "xgboost": "3.3.0"
+  }
+}

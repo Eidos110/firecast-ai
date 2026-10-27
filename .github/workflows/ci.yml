@@ -1,0 +1,214 @@
+# =============================================================================
+# FireCast CI — Fase 5 quality gate
+# Matrix: Python 3.11 / 3.12, full test suite, lint, type-check, smoke build.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+# Cancel redundant in-progress runs on the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Python backend — install, lint, type-check, test, coverage
+  # ---------------------------------------------------------------------------
+  python:
+    name: Python ${{ matrix.python-version }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install CPU PyTorch
+        # CPU-only torch is ~200 MB smaller than the GPU build, matches the
+        # Railway / HF Spaces runtime, and avoids driver-version pinning.
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu \
+              torch==2.4.0+cpu
+
+      - name: Install project dependencies
+        shell: bash
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        shell: bash
+        run: |
+          ruff check src tests start_api.py launch_prototype.py scripts --output-format=github
+
+      - name: Format check (black)
+        shell: bash
+        run: |
+          black --check --diff src tests start_api.py launch_prototype.py scripts
+
+      - name: Compile sanity (compileall)
+        shell: bash
+        run: |
+          python -m compileall -q src start_api.py launch_prototype.py scripts
+
+      - name: Pytest with coverage (src)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          # FastAPI / auth tests need a non-empty secret.
+          API_SECRET_KEY: ci-dummy-secret-key-for-github-actions-only
+          # Frontend smoke tests must not hit live OpenWeatherMap (rate-limit safe
+          # + deterministic; see Task 5.2 / tests/test_ui_revamp_integration.py).
+          OPENWEATHER_API_KEY: ci-dummy-owm-key
+          DISABLE_REALTIME_WEATHER: "1"
+        shell: bash
+        run: |
+          python -m pytest tests/ \
+              -p no:randomly \
+              --tb=short \
+              --maxfail=1 \
+              --cov=src \
+              --cov-report=term-missing:skip-covered \
+              --cov-report=xml \
+              --cov-report=html \
+              --cov-fail-under=40
+
+      # Streamlit-era UI tests are gone with the SPA migration; the React
+      # suite runs in the dedicated ``frontend`` job below.
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload HTML coverage report
+        if: always() && matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Frontend React — typecheck, lint, vitest
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend React
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend_react
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend_react/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript type-check
+        shell: bash
+        run: npx tsc --noEmit
+
+      - name: Lint (eslint)
+        shell: bash
+        run: npm run lint
+
+      - name: Vitest component tests
+        shell: bash
+        run: npm test
+
+      - name: Build (production bundle smoke)
+        shell: bash
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Lighthouse CI — performance / a11y / SEO audit on the React bundle.
+  # ---------------------------------------------------------------------------
+  lighthouse:
+    name: Lighthouse audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend_react
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend_react/package-lock.json
+
+      - name: Install dependencies
+        # Install with chrome provided by puppeteer so Lighthouse can use
+        # it without a system chrome dependency.
+        shell: bash
+        run: npm ci --no-audit --no-fund
+
+      - name: Build production bundle
+        shell: bash
+        run: npm run build
+
+      - name: Run Lighthouse CI
+        shell: bash
+        env:
+          # LHCI needs a chrome binary; puppeteer ships one with npm ci.
+          CHROME_PATH: ${{ '' }}
+        run: |
+          npx --yes @lhci/cli autorun \
+            --config=./lighthouserc.cjs \
+            --collect.url=http://localhost:4173/
+
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: frontend_react/.lighthouseci
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Docker smoke build (CPU runtime used by Render/HF Spaces)
+  # ---------------------------------------------------------------------------
+  docker-smoke:
+    name: Docker smoke build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        run: docker build -t firecast:ci-smoke --target base .

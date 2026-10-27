@@ -5,15 +5,15 @@ Provides functions to load and run XGBoost predictions.
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any
 
-import numpy as np
 import joblib
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def load_xgb_model(model_path: Union[str, Path]) -> any:
+def load_xgb_model(model_path: str | Path) -> Any:
     """
     Load XGBoost model from pickle file.
 
@@ -41,7 +41,7 @@ def load_xgb_model(model_path: Union[str, Path]) -> any:
 
 
 def predict_xgb(
-    model: any,
+    model: Any,
     X: np.ndarray,
     use_proba: bool = True,
 ) -> np.ndarray:
@@ -55,8 +55,13 @@ def predict_xgb(
 
     Returns:
         Array of predictions (probability of class 1 if use_proba=True)
+
+    Raises:
+        RuntimeError: If prediction fails. We intentionally DO NOT return a
+            silent 0.5 fallback — a bogus "Medium" risk label could mask a
+            real fire danger (AGENTS.md §3 "Penanganan model ML"). Callers
+            (predict.py) wrap this as PredictionError → HTTP 500.
     """
-    n = X.shape[0] if hasattr(X, "shape") else len(X)
     try:
         if use_proba:
             # predict_proba first — works for XGBClassifier/xgb.XGBModel (sklearn ≥ 2)
@@ -73,17 +78,22 @@ def predict_xgb(
                     if arr.min() < -0.1 or arr.max() > 1.1:
                         arr = 1.0 / (1.0 + np.exp(-arr))
                     return np.clip(arr, 0.0, 1.0)
+                raise RuntimeError("XGBoost .predict() returned None")
 
-        return model.predict(X)
+        raise RuntimeError(
+            f"Unsupported XGBoost model object {type(model).__name__}: "
+            "expected predict_proba() or predict()."
+        )
 
     except Exception as e:
-        logger.warning(f"XGBoost prediction error: {e}. Using neutral 0.5 fallback.")
-        return np.full(n, 0.5, dtype=float)
+        logger.error("XGBoost prediction failed: %s", e, exc_info=True)
+        raise RuntimeError(f"XGBoost prediction failed: {e}") from e
 
 
 if __name__ == "__main__":
-    import sys
     import logging
+    import sys
+
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
