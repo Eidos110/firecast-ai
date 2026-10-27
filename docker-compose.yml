@@ -6,15 +6,13 @@
 # / api / nginx tier is needed in dev unless the operator wants TLS.
 #
 # Usage:
-#   docker-compose up -d            # build + run the all-in-one service
-#   docker-compose up -d --build    # force rebuild (e.g. after SPA src change)
-#   docker-compose logs -f firecast
-#   docker-compose down
+#   docker compose up -d            # build + run the all-in-one service
+#   docker compose up -d --build    # force rebuild (e.g. after SPA src change)
+#   docker compose logs -f firecast
+#   docker compose down
 #
 # For HTTPS / reverse-proxy in production add the `nginx` profile (see below).
 # =============================================================================
-
-version: "3.8"
 
 services:
   firecast:
@@ -30,10 +28,7 @@ services:
       - LOG_LEVEL=WARNING
       - HOST=0.0.0.0
       - PORT=7860
-      - ENABLE_DEMO_MODE=false
       - ML_DEVICE=cpu
-      - ENABLE_CORS=true
-      - ALLOWED_ORIGINS=*
     env_file:
       - .env
     volumes:
@@ -72,6 +67,3 @@ services:
 networks:
   firecast:
     driver: bridge
-
-volumes:
-  firecast-models:

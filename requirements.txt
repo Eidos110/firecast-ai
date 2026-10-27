@@ -1,119 +1,56 @@
-# FireCast Core Dependencies
-# ==========================
-# Install all dependencies:
-#   pip install -r requirements.txt
+# FireCast runtime dependencies (FastAPI service + inference).
+# Python 3.12. Install: pip install -r requirements.txt
 #
-# This file includes ALL dependencies for both frontend and API.
-# For deployment, Railway installs everything from this file.
+# Training notebooks may need extra packages (matplotlib, jupyter, ...); see
+# requirements-dev.txt. Keep this file aligned with pyproject.toml [project].
 
 # =============================================================================
-# Core Data Science
-# Pinned to match training runtime env (FIREvCPU: py3.12 CPU) to avoid
-# pickle InconsistentVersion warnings from sklearn/xgboost/lightgbm.
-# NOTE: numpy<2 is a workaround for shap's _colorconv.py np.inexact bug
-#       (shap 0.46 shipped a stale vendored skimage color converter that
-#        calls np.dtype(np.floating) which numpy>=2 rejects). Revisit once
-#        a fixed shap wheel (>=0.47) is released.
+# Core data / ML
+# =============================================================================
+# Pinned to the training runtime (FIREvCPU, py3.12 CPU) so pickles load
+# without an InconsistentVersionWarning.
+# numpy<2 is required by the shap wheel pinned below (stale vendored skimage).
 numpy>=1.26,<2
 pandas>=2.0.3
-# Parquet read/write (ROADMAP §2-I): used by src/data_loader._read_tabular
-# to prefer the .parquet twin when present. Snappy compression keeps file
-# 3-4x smaller than CSV. Required for the migration path to work.
+# Parquet twin reader (src/data_loader.py prefers .parquet over .csv).
 pyarrow>=14.0.0
 scikit-learn>=1.9.0
 
-# =============================================================================
-# Geospatial Libraries
-# =============================================================================
-shapely>=2.0.0
-geopandas>=0.14.0
-h3>=3.7.6
-
-# =============================================================================
-# Deep Learning - CPU Version (PyTorch 2.x for Railway execstack fix)
-# =============================================================================
-# torch==1.10.2 triggers "libtorch_cpu.so: cannot enable executable stack" on Railway
-# torch>=2.1 ships PT_GNU_STACK=RWX, compatible with Railway's process personality
-# Force CPU-only PyTorch wheels to avoid CUDA stack on render free workers
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.4.1
-torchvision>=0.19.1
-
-# =============================================================================
-# Gradient Boosting
-# =============================================================================
-# lightgbm 3.3.5 was for legacy pickle compat, but no 3.3.5 wheel exists for
-# py3.12. Pin to runtime 4.6.0 to match trained stacking model.
+# LightGBM/XGBoost versions must match the trained V4.2 bundle exactly.
 lightgbm==4.6.0
 xgboost==3.3.0
 
-# =============================================================================
-# Model Persistence
-# =============================================================================
+# Optional SHAP explanations degrade to {} when the wheel cannot load.
+shap>=0.45.0
 joblib>=1.3.1
 
-# =============================================================================
-# Visualization & Analysis
-# =============================================================================
-matplotlib>=3.7.2
-seaborn>=0.12.2
+# CPU-only PyTorch (legacy CNN path). Keep the extra index so pip picks the
+# CPU wheel instead of pulling the CUDA stack. torchvision is not used.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.4.1
 
 # =============================================================================
-# ML Metrics (SHAP)
+# Geospatial
 # =============================================================================
-# shap>=0.45 fixes numpy 2.x dtype bug; 0.46 verified working at runtime.
-shap>=0.45.0
+# Only shapely is imported (AOI point-in-polygon); the AOI grid falls back to
+# the bounding box when it is missing.
+shapely>=2.0.0
 
 # =============================================================================
-# Configuration & Environment
-# =============================================================================
-python-dotenv>=1.0.0
-pyyaml>=6.0.1
-
-# =============================================================================
-# Utilities
-# =============================================================================
-tqdm>=4.66.1
-requests>=2.31.0
-
-# =============================================================================
-# Runtime services (sqlmodel + Earth Engine)
-# =============================================================================
-# Streamlit/folium/plotly/aggrid were removed at TAHAP E (React SPA is now
-# the only UI; requirements here must mirror pyproject.toml). What remains:
-#  - sqlmodel        — lazy-imported by src/database.py (model registry DB)
-#  - earthengine-api — lazy-imported for GEE band fetch with synthetic fallback
-sqlmodel>=0.0.14
-earthengine-api>=0.1.371
-
-# =============================================================================
-# API (FastAPI) Dependencies
+# API, caching, persistence
 # =============================================================================
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
-# orjson: 2-3x faster JSON serialization for endpoints that emit large arrays
-# (prediction prob+shap, /api/models listing). Drop-in via ORJSONResponse.
 orjson>=3.10.0
-cachetools>=5.5.0  # TTLCache for short-lived per-request memoization
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-python-multipart>=0.0.6
-apscheduler>=3.10.4
+cachetools>=5.5.0
 slowapi>=0.1.9
+sqlmodel>=0.0.14
+python-dotenv>=1.0.0
 
 # =============================================================================
-# Observability (Audit rekomendasi "Sentry/OpenTelemetry") — optional
+# Optional observability (no-op without SENTRY_DSN / OTEL endpoint)
 # =============================================================================
-# Both libs are imported lazily inside src/observability.py. Absence is fine:
-# capture_exception add_breadcrumb & span degrade to no-op. Install these
-# only when you have a Sentry DSN / OTLP endpoint to wire them up.
-sentry-sdk[fastapi]>=1.40.0  # optional; init via SENTRY_DSN env
+sentry-sdk[fastapi]>=1.40.0
 opentelemetry-api>=1.24.0
 opentelemetry-sdk>=1.24.0
 opentelemetry-exporter-otlp-proto-http>=1.24.0
-
-# =============================================================================
-# Development (excluded from deployment)
-# =============================================================================
-# These are in requirements-dev.txt and are not installed by Railway.
-# - pytest, flake8, mypy, black, etc.

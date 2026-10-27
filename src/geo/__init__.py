@@ -1,9 +1,8 @@
-"""Geospatial helpers for the FireCast Geo API (Tahap B).
+"""Geospatial helpers for the FireCast API.
 
-Submodules here MUST stay Streamlit-free so they can be imported by the
-REST backend without pulling the (deprecated) Streamlit component runtime.
-Lazy import of optional deps (``geopandas``/``shapely``/``h3``) follows the
-same policy as ``src/__init__.py`` — never eagerly require them.
+Submodules stay framework-free and importable without the SPA. The only
+optional dependency is ``shapely`` (AOI point-in-polygon); it is imported
+lazily and the grid falls back to the full bounding box when unavailable.
 """
 
 from __future__ import annotations

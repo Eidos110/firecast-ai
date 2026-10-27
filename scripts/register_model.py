@@ -7,11 +7,8 @@ Register new model versions with the registry.
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from src.models import registry
-from src.database import init_db, get_engine
-from src.predict import load_ensemble_models
 
 
 def main():
@@ -19,11 +16,11 @@ def main():
         description="Register a new model version with the FireCast registry"
     )
     parser.add_argument(
-        "--model", required=True, choices=["cnn", "lgbm"], help="Model name"
+        "--model",
+        required=True,
+        help="Logical model name (e.g. cnn, lgbm, lgb, xgb, stacking).",
     )
-    parser.add_argument(
-        "--version", required=True, help="Version string (e.g., v1.0.0)"
-    )
+    parser.add_argument("--version", required=True, help="Version string (e.g., v1.0.0)")
     parser.add_argument("--path", required=True, help="Path to model file")
     parser.add_argument(
         "--metrics",
@@ -42,13 +39,13 @@ def main():
     metadata = None
     if args.metrics:
         try:
-            with open(args.metrics, "r") as f:
+            with open(args.metrics) as f:
                 metrics = json.load(f)
         except Exception as e:
             print(f"Warning: Could not load metrics file: {e}")
     if args.metadata:
         try:
-            with open(args.metadata, "r") as f:
+            with open(args.metadata) as f:
                 metadata = json.load(f)
         except Exception as e:
             print(f"Warning: Could not load metadata file: {e}")

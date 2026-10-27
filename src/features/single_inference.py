@@ -1,29 +1,17 @@
-"""Single-sample inference helpers (audit Fase 3a + UI Revamp Fase 6 Task 6.7).
+"""Single-sample inference helpers: request features → model feature vector.
 
-Contains:
-  - :func:`estimate_temporal_feature` — lag3/roll7 estimator (deterministic
-    heuristic that replays the historical ``src.predict._estimate_temporal_feature``
-    bit-for-bit, kept in lockstep with that function so behaviour does not
-    regress; the predict.py copy is now a thin re-export).
-  - :func:`create_feature_vector` — full engineer-feature builder. Before
-    Task 6.7 this function delegated back to :mod:`src.predict`; now it owns
-    the 252-line body verbatim. ``predict._create_feature_vector`` is now a
-    thin re-export so external callers (tests, frontend prediction_engine)
-    see identical behaviour without churn.
+The active V4.2 bundle consumes 34 cross-section features (see
+``add_new_model/feature_cols.json``). Two builders exist:
 
-Heavy or domain-specific code (the actual feature engineering formulas) is
-still located in :mod:`src.predict`; the helpers below are stable entry
-points that can be evolved independently of predict.py's structure.
+* :func:`estimate_temporal_feature` — deterministic lag3/roll7 heuristic kept
+  for the legacy CNN+LGBM feature set. V4.2 does not use lag/roll columns.
+* :func:`create_feature_vector` — assembles the request dictionary
+  (temperature/humidity/wind/rainfall/NDVI/bands) into the ordered numeric
+  vector, converting user units (°C, mm) to training units (Kelvin, meters).
 
-Why keep helpers inline (and not import from predict.py)?
-  - Avoid cyclic imports. predict.py still references these via its public
-    re-export alias (``_estimate_temporal_feature = estimate_temporal_feature``)
-    but the actual logic migrates here. predict.py's footprint drops by
-    ~440 lines (Task 6.7 AC), breaking the 1769-line monolith into < 1300
-    lines.
-  - Lazy import bodies: ``pandas``, ``json``, ``config`` are imported inside
-    functions so importing this module from a tight sandbox (Railway/HF
-    Spaces without `pandas`) does not raise.
+``src.predict._create_feature_vector`` is a thin re-export of this module.
+Optional imports stay inside functions so sandboxes without pandas/GEE can
+still import the helper.
 """
 
 from __future__ import annotations
@@ -34,6 +22,7 @@ import logging
 import math
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -55,6 +44,29 @@ def _safe_divide(
     if isinstance(result, np.ndarray):
         return np.clip(result, -1e10, 1e10)
     return max(min(result, 1e10), -1e10)
+
+
+def _load_train_stats() -> dict[str, float]:
+    """Load train-only quantiles from ``add_new_model/train_stats.json``.
+
+    These are the exact thresholds the training pipeline used for the binary
+    fire-weather flags (notebook cell 2). Serving from the same file (instead
+    of hardcoded °C guesses) keeps the train/serve threshold contract locked
+    in one artifact. Returns ``{}`` when the file is missing (sandbox / fresh
+    checkout) — callers fall back to conservative literals that match the
+    training units (Kelvin / meters).
+    """
+    try:
+        from src import config
+
+        path = Path(config.NEW_MODEL_DIR) / "train_stats.json"
+        with open(path, encoding="utf-8") as f:
+            stats = json.load(f)
+        if isinstance(stats, dict):
+            return {k: float(v) for k, v in stats.items() if isinstance(v, (int, float))}
+    except Exception:  # noqa: BLE001 — missing artifact must not break inference
+        logger.warning("train_stats.json unavailable — using built-in Kelvin-unit defaults")
+    return {}
 
 
 def estimate_temporal_feature(
@@ -139,12 +151,10 @@ def create_feature_vector(
     use_new_features: bool = False,
     reference_date: datetime | None = None,
 ) -> np.ndarray:
-    """Build a (1, n_features) engineered feature vector from input dict.
+    """Build a ``(1, n_features)`` engineered feature vector from a request dict.
 
-    Full body migrated from :func:`src.predict._create_feature_vector` in
-    Task 6.7 (UI Revamp Fase 6) — predict.py now delegates to this function
-    so callers importing :mod:`src.features.single_inference` get a stable
-    path while predict.py's footprint drops below 1300 lines.
+    ``src.predict`` delegates here so there is one implementation of the
+    train/serve unit contract (see AGENTS.md bug #15).
 
     Args:
         features: Input feature dictionary. Recognised keys: ``temperature``,
@@ -152,9 +162,9 @@ def create_feature_vector(
             ``ndvi``, ``vegetation_type``, ``latitude``, ``longitude``,
             ``elevation``, ``land_cover``, plus optional spectral bands
             ``B2, B3, B4, B8, B11, B12`` (sent by GEE).
-        use_new_features: If True, load the new-model feature_columns JSON
-            (79 features). If False, load legacy (79 features post-2026-08-04;
-            previously 59 features) via ``config.FEATURE_COLUMNS_PATH``.
+        use_new_features: If True, order the vector by the V4.2
+            ``add_new_model/feature_cols.json`` (34 features). If False, use
+            the legacy CNN+LGBM ``config.FEATURE_COLUMNS_PATH``.
         reference_date: Optional anchor date for derived time features
             (``month``, ``day``, ``doy``). ROADMAP §3-W1 passes the date
             picked via the SPA Header scrubber here so engineers can replay
@@ -173,14 +183,25 @@ def create_feature_vector(
             shape-nya salah").
     """
     # ---- extract inputs from the features dict (mirrors predict.py verbatim)
-    temp = features.get("temperature", 30)
-    humidity = features.get("humidity", 50)
-    wind_speed = features.get("wind_speed", 5)
+    # UNIT CONTRACT (audit 2026-08-23, bug #15): the request payload is in
+    # "user" units — temperature °C, rainfall mm — but the training dataset
+    # (firecast_data_readymodelling_final_V3.csv) stores temp_max/dewpoint in
+    # KELVIN (mean 298.33 / 277.38) and precip in METERS (max 0.05). The
+    # conversions to training units happen below, at feature-assembly time,
+    # so the scalers and models receive inputs on the same scale they were
+    # fitted on.
+    # Defensive clamps: the HTTP layer validates /predict ranges, but AOI
+    # base_features and direct library callers bypass Pydantic. A humidity of
+    # 0 makes log(0) below raise and temperature near -237.7 °C divides by
+    # zero in the Magnus formula; clamp to physically meaningful bounds.
+    temp = float(features.get("temperature", 30))  # °C
+    humidity = min(max(float(features.get("humidity", 50)), 1.0), 100.0)
+    wind_speed = float(features.get("wind_speed", 5))  # m/s (same unit as training)
     wind_direction = features.get("wind_direction", 0)
-    rainfall = features.get("rainfall")  # Default is None (not provided)
-    # Use 1.0mm (threshold) for feature engineering if not provided - neutral assumption
-    # This ensures model receives valid numeric input without falsely triggering "dry" conditions
-    rainfall_numeric = 1.0 if rainfall is None else rainfall
+    rainfall = features.get("rainfall")  # mm; Default is None (not provided)
+    # Use 1.0mm for feature engineering if not provided - neutral assumption
+    # (1 mm = 0.001 m ≈ training precip_mean; see base_dict assembly below)
+    rainfall_numeric = 1.0 if rainfall is None else float(rainfall)
     ndvi = features.get("ndvi", 0.3)
     vegetation_type = features.get("vegetation_type", "Savana")
     lat = features.get("latitude", -2.0)
@@ -194,13 +215,24 @@ def create_feature_vector(
         land_cover = features["land_cover"]
     else:
         land_cover_map = {
-            "Hutan": 10, "Forest": 10, "Hutan Tropis Lembab": 10,
-            "Semak": 20, "Shrub": 20, "Semak Kering": 20,
-            "Savana": 30, "Savanna": 30,
-            "Rumput": 40, "Grass": 40, "Padang Rumput": 40, "Lahan Gambut": 40,
-            "Lahan Pertanian": 50, "Agriculture": 50,
-            "Lahan Terbuka": 60, "Open Land": 60,
-            "Pemukiman": 70, "Settlement": 70,
+            "Hutan": 10,
+            "Forest": 10,
+            "Hutan Tropis Lembab": 10,
+            "Semak": 20,
+            "Shrub": 20,
+            "Semak Kering": 20,
+            "Savana": 30,
+            "Savanna": 30,
+            "Rumput": 40,
+            "Grass": 40,
+            "Padang Rumput": 40,
+            "Lahan Gambut": 40,
+            "Lahan Pertanian": 50,
+            "Agriculture": 50,
+            "Lahan Terbuka": 60,
+            "Open Land": 60,
+            "Pemukiman": 70,
+            "Settlement": 70,
         }
         land_cover = land_cover_map.get(vegetation_type, 30)
 
@@ -220,16 +252,21 @@ def create_feature_vector(
     doy = now.timetuple().tm_yday
 
     # Calculate derived meteorological features
-    # Dewpoint approximation using Magnus formula
+    # Dewpoint approximation using Magnus formula (input/Output °C; converted
+    # to Kelvin at feature-assembly time because training stored Kelvin).
     a = 17.271
     b = 237.7
     alpha = ((a * temp) / (b + temp)) + math.log(humidity / 100.0)
     dewpoint = (b * alpha) / (a - alpha)
+    dewpoint_k = dewpoint + 273.15  # training unit
+    temp_max = temp + 273.15  # training unit: temp_max is Kelvin (mean 298.33)
 
-    # VPD (Vapor Pressure Deficit) - using proper Magnus formula
-    es = 6.1078 * 10 ** ((7.5 * temp) / (237.3 + temp))
-    ea = (humidity / 100.0) * es
-    vpd = max(0, es - ea)
+    # VPD — training defined this as ``temp_max - dewpoint`` (Kelvin columns,
+    # notebook cell 2), i.e. a plain temperature difference. A K difference
+    # equals a °C difference, so compute it in °C here; do NOT use the old
+    # Magnus es/ea (hPa) variant — it produced values ~15x smaller
+    # than the training distribution (mean ≈ 21).
+    vpd = max(0.0, temp - dewpoint)
 
     # Wind magnitude
     wind_mag = math.sqrt(wind_u**2 + wind_v**2)
@@ -258,17 +295,33 @@ def create_feature_vector(
     evi = 2.5 * _safe_divide(B8 - B4, B8 + 6 * B4 - 7.5 * B2 + 1)
 
     # Fire weather indices
-    dry_day = 1 if rainfall is not None and rainfall < 1.0 else 0
-    dry_spell_7 = dry_day * 3
-    dry_spell_30 = dry_day * 3
+    # precip in training units (meters): 1 mm = 0.001 m. Training max is
+    # 0.05 m, so the "< 1.0" dry-day cut (meters) is effectively always
+    # true there — replicate that behaviour instead of the old mm-based
+    # comparison, which produced a constant-0 feature while training was
+    # constant-1 (bug #15 sub-finding).
+    precip_m = rainfall_numeric / 1000.0
+    dry_day = 1 if precip_m < 1.0 else 0
+    dry_spell_7 = dry_day * 3  # training ramps 1..7 (rolling sum); 3 = mid-range
+    dry_spell_30 = dry_day * 3  # training ramps 1..30; 3 = within range
     fuel_dryness = vpd * (1 - ndvi)
 
-    # Threshold indicators - configurable via environment variables
-    temp_threshold = float(os.getenv("RISK_TEMP_THRESHOLD", "32"))
-    vpd_threshold = float(os.getenv("RISK_VPD_THRESHOLD", "12"))
-    wind_threshold = float(os.getenv("RISK_WIND_THRESHOLD", "4"))
+    # Threshold indicators. Training (notebook cell 2) derives every cut from
+    # TRAIN-ONLY quantiles persisted in add_new_model/train_stats.json — e.g.
+    # temp_max_q75 ≈ 302 K, not 32 °C. Serving must use the SAME thresholds or
+    # the binary flags flip distribution (bug #15: hot_threshold was always 0
+    # serving because 30 °C < 32 < 302 K compares in the wrong unit). Env
+    # vars still override for experimentation.
+    train_stats = _load_train_stats()
+    temp_threshold = float(
+        os.getenv("RISK_TEMP_THRESHOLD", str(train_stats.get("temp_max_q75", 302.4)))
+    )
+    vpd_threshold = float(os.getenv("RISK_VPD_THRESHOLD", str(train_stats.get("vpd_q75", 23.0))))
+    wind_threshold = float(
+        os.getenv("RISK_WIND_THRESHOLD", str(train_stats.get("wind_speed_q75", 4.5)))
+    )
 
-    hot_threshold = 1 if temp > temp_threshold else 0
+    hot_threshold = 1 if temp_max > temp_threshold else 0
     dry_threshold = 1 if vpd > vpd_threshold else 0
     windy_threshold = 1 if wind_speed > wind_threshold else 0
     extreme_fire_weather = hot_threshold + dry_threshold + windy_threshold
@@ -276,8 +329,14 @@ def create_feature_vector(
     # Trend features (approximated for single prediction)
     temp_change_3d = 0.0
     wind_change_3d = 0.0
-    precip_deficit_7d = max(0, 10 - rainfall_numeric * 7)
-    extreme_days_5d = extreme_fire_weather
+    # Training: (precip.rolling(7).mean() - precip_mean).clip(lower=0) in
+    # METERS — values are ~0..0.05, never the old "10 - mm*7" ≈ 3 (order of
+    # magnitude out of distribution). Use the roll7 estimator in meters.
+    _, precip_roll7_m = estimate_temporal_feature("precip", precip_m, month, doy)
+    precip_mean = float(train_stats.get("precip_mean", 0.0016))
+    precip_deficit_7d = max(0.0, precip_roll7_m - precip_mean)
+    # Training: (extreme_fire_weather.rolling(5).sum() > 0).astype(int) → binary
+    extreme_days_5d = 1 if extreme_fire_weather > 0 else 0
 
     # Cyclical time features
     month_sin = math.sin(2 * math.pi * month / 12)
@@ -285,22 +344,40 @@ def create_feature_vector(
     doy_sin = math.sin(2 * math.pi * doy / 365)
     doy_cos = math.cos(2 * math.pi * doy / 365)
 
-    # Precipitation / temp_max aliases for downstream feature columns
-    precip = rainfall_numeric
-    temp_max = temp
+    # Precipitation / temp_max for downstream feature columns: both already
+    # converted to training units above (precip meters, temp_max Kelvin).
+    precip = precip_m
 
     logger.info(
-        "Input features: temp=%s, humidity=%s, wind_speed=%s, precip=%s, ndvi=%s",
-        temp, humidity, wind_speed, precip, ndvi,
+        "Input features: temp=%s (C), humidity=%s, wind_speed=%s, precip=%s (m), ndvi=%s",
+        temp,
+        humidity,
+        wind_speed,
+        precip,
+        ndvi,
     )
 
     # Build base feature dictionary
     base_dict = {
-        "B11": B11, "B12": B12, "B2": B2, "B3": B3, "B4": B4, "B8": B8,
-        "dewpoint": dewpoint, "elevation": elevation, "land_cover": land_cover,
-        "lat": lat, "lon": lon, "ndvi": ndvi, "precip": precip,
-        "temp_max": temp_max, "wind_speed": wind_speed,
-        "wind_u": wind_u, "wind_v": wind_v, "month": month, "day": day,
+        "B11": B11,
+        "B12": B12,
+        "B2": B2,
+        "B3": B3,
+        "B4": B4,
+        "B8": B8,
+        "dewpoint": dewpoint_k,
+        "elevation": elevation,
+        "land_cover": land_cover,
+        "lat": lat,
+        "lon": lon,
+        "ndvi": ndvi,
+        "precip": precip,
+        "temp_max": temp_max,
+        "wind_speed": wind_speed,
+        "wind_u": wind_u,
+        "wind_v": wind_v,
+        "month": month,
+        "day": day,
     }
 
     # Calculate lag and rolling features using realistic estimators
@@ -312,17 +389,30 @@ def create_feature_vector(
 
     # Combine all features
     all_features = {
-        **base_dict, **lag_features,
-        "month_sin": month_sin, "month_cos": month_cos,
-        "doy": doy, "doy_sin": doy_sin, "doy_cos": doy_cos,
-        "vpd": vpd, "wind_mag": wind_mag,
-        "dry_day": dry_day, "dry_spell_7": dry_spell_7, "dry_spell_30": dry_spell_30,
+        **base_dict,
+        **lag_features,
+        "month_sin": month_sin,
+        "month_cos": month_cos,
+        "doy": doy,
+        "doy_sin": doy_sin,
+        "doy_cos": doy_cos,
+        "vpd": vpd,
+        "wind_mag": wind_mag,
+        "dry_day": dry_day,
+        "dry_spell_7": dry_spell_7,
+        "dry_spell_30": dry_spell_30,
         "fuel_dryness": fuel_dryness,
-        "hot_threshold": hot_threshold, "dry_threshold": dry_threshold,
-        "windy_threshold": windy_threshold, "extreme_fire_weather": extreme_fire_weather,
-        "ndwi": ndwi, "nbr": nbr, "evi": evi,
-        "temp_change_3d": temp_change_3d, "wind_change_3d": wind_change_3d,
-        "precip_deficit_7d": precip_deficit_7d, "extreme_days_5d": extreme_days_5d,
+        "hot_threshold": hot_threshold,
+        "dry_threshold": dry_threshold,
+        "windy_threshold": windy_threshold,
+        "extreme_fire_weather": extreme_fire_weather,
+        "ndwi": ndwi,
+        "nbr": nbr,
+        "evi": evi,
+        "temp_change_3d": temp_change_3d,
+        "wind_change_3d": wind_change_3d,
+        "precip_deficit_7d": precip_deficit_7d,
+        "extreme_days_5d": extreme_days_5d,
     }
 
     # Load feature columns to ensure correct order
@@ -342,14 +432,16 @@ def create_feature_vector(
                 feature_columns = json.load(f)
             logger.info(
                 "Using new model features (%d): %s...",
-                len(feature_columns), feature_columns[:10],
+                len(feature_columns),
+                feature_columns[:10],
             )
         else:
             with open(config.FEATURE_COLUMNS_PATH) as f:
                 feature_columns = json.load(f)
             logger.info(
                 "Using legacy features (%d): %s...",
-                len(feature_columns), feature_columns[:10],
+                len(feature_columns),
+                feature_columns[:10],
             )
 
         feature_vector = []

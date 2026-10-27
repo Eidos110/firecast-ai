@@ -52,11 +52,8 @@ Hal-hal yang **tidak** diambil langsung dari V4 (perlu disesuaikan):
 - Dari **V2**: pertahankan **streaming hotspot table** kolom-kanan (sangat penting untuk ops live)
 - Dari **V3**: pertahankan **raw API response JSON** dalam expander (debug engineer)
 
-## Mockup Preview PNG
+## Mockup Preview
 
-Hasil render matplotlib/Plotly yang saya buat di iterasi sebelumnya (lihat folder `_preview_ui/`):
-
-- `_preview_ui/preview_shap_waterfall.png` — komponen SHAP waterfall
-- `_preview_ui/preview_temporal_band.png` — komponen temporal forecast + p10-p90 band
-- `_preview_ui/preview_risk_gauge.png` — risk gauge + status bar + model card
-- `_preview_ui/render_previews.py` — script generator (untuk revisi dummy data)
+> Catatan 2026-10-23: dokumen ini adalah rencana UI era Streamlit dan bersifat
+> historis. Mockup PNG + generator matplotlib (`_preview_ui/`) sudah dihapus;
+> UI aktif adalah React SPA di `frontend_react/`.

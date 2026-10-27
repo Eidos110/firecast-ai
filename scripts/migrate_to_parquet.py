@@ -16,6 +16,7 @@ Dtype note: Parquet preserves pandas dtypes natively, so ``time`` stays a
 ``src/geo/services.py:_trend_load_df`` becomes a no-op. This is intentional
 and prevents a class of "timestamp parsed as string" bugs after migration.
 """
+
 from __future__ import annotations
 
 import logging

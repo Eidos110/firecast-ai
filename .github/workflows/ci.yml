@@ -60,19 +60,19 @@ jobs:
       - name: Lint (ruff)
         shell: bash
         run: |
-          ruff check src tests main.py start_api.py --output-format=github
+          ruff check src tests start_api.py launch_prototype.py scripts --output-format=github
 
       - name: Format check (black)
         shell: bash
         run: |
-          black --check --diff src tests main.py start_api.py
+          black --check --diff src tests start_api.py launch_prototype.py scripts
 
       - name: Compile sanity (compileall)
         shell: bash
         run: |
-          python -m compileall -q src main.py start_api.py
+          python -m compileall -q src start_api.py launch_prototype.py scripts
 
-      - name: Pytest with coverage (src + frontend/components)
+      - name: Pytest with coverage (src)
         env:
           PYTHONPATH: ${{ github.workspace }}
           # FastAPI / auth tests need a non-empty secret.
@@ -88,34 +88,13 @@ jobs:
               --tb=short \
               --maxfail=1 \
               --cov=src \
-              --cov=frontend/utils \
               --cov-report=term-missing:skip-covered \
               --cov-report=xml \
               --cov-report=html \
               --cov-fail-under=40
 
-      # (Tahap E): The "Frontend components coverage gate" step and the
-      # Streamlit AppTest smoke step that targeted ``frontend/app.py`` were
-      # REMOVED when TAHAP A deleted the Streamlit-native UI. The row-by-row
-      # coverage gate depended on ``frontend/components/{status_bar,
-      # right_diagnostic, bottom_bar, shap_waterfall, temporal_band,
-      # interactive_map}.py`` (all gone) plus Streamlit-test files that no
-      # longer exist. The React SPA tests live under ``frontend_react/src/``
-      # and are run by the dedicated ``frontend`` job below.
-      - name: Frontend utils coverage (TAHAP E consolidation)
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-          API_SECRET_KEY: ci-dummy-secret-key-for-github-actions-only
-          OPENWEATHER_API_KEY: ci-dummy-owm-key
-          DISABLE_REALTIME_WEATHER: "1"
-        shell: bash
-        run: |
-          python -m pytest tests/frontend/ \
-              -p no:randomly \
-              --tb=short \
-              --cov=frontend/utils/log_handler.py \
-              --cov-report=term-missing \
-              --cov-report=xml:coverage-frontend.xml
+      # Streamlit-era UI tests are gone with the SPA migration; the React
+      # suite runs in the dedicated ``frontend`` job below.
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'

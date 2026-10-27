@@ -8,11 +8,19 @@ import sys
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.predict import PredictionError, _calculate_risk_factors, _get_risk_level, predict_fire_risk
+from src.predict import (
+    PredictionError,
+    _calculate_risk_factors,
+    _get_risk_level,
+    _safe_lgbm_predict,
+    predict_fire_risk,
+)
 
 
 class TestRiskLevel(unittest.TestCase):
@@ -134,6 +142,22 @@ class TestPredictFireRisk(unittest.TestCase):
         self.assertIn(result["risk_level"], ["High", "Extreme"])
 
 
+class TestSafeLgbmPredict(unittest.TestCase):
+    """The LightGBM safety wrapper must fail loudly, never return None."""
+
+    def test_unsupported_model_raises(self):
+        with self.assertRaises(RuntimeError):
+            _safe_lgbm_predict(object(), np.zeros((1, 3)))
+
+    def test_none_prediction_raises(self):
+        class _NoneModel:
+            def predict(self, X):  # noqa: N802 - mirrors LightGBM API
+                return None
+
+        with self.assertRaises(RuntimeError):
+            _safe_lgbm_predict(_NoneModel(), np.zeros((1, 3)))
+
+
 class TestPredictionIntegration(unittest.TestCase):
     """Integration tests for prediction pipeline."""
 
@@ -163,6 +187,26 @@ class TestPredictionIntegration(unittest.TestCase):
         risk_score = result["risk_score"]
         expected_level = _get_risk_level(risk_score)
         self.assertEqual(result["risk_level"], expected_level)
+        self.assertIn("decision_threshold", result)
+
+    def test_cache_hit_returns_independent_copy(self):
+        """Mutating a cached result must not poison later responses.
+
+        /predict/aoi enriches its result dicts with lat/lon/row/col. Returning
+        the cached object by reference previously leaked those fields into a
+        later single-point /predict call with the same feature key.
+        """
+        features = {
+            "temperature": 31,
+            "humidity": 50,
+            "wind_speed": 4,
+            "latitude": -2.5,
+            "longitude": 112.0,
+        }
+        first = predict_fire_risk(dict(features), use_cache=True)
+        first["poison"] = True
+        second = predict_fire_risk(dict(features), use_cache=True)
+        self.assertNotIn("poison", second)
 
 
 if __name__ == "__main__":

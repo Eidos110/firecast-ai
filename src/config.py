@@ -93,9 +93,8 @@ class PathsConfig:
     @property
     def locations_path(self) -> Path:
         """Indonesian city registry ``{key: {name, lat, lon}}`` served by
-        ``GET /geo/locations`` (Tahap B endpoint for the React SPA sidebar
-        lookup). Kept as a single source of truth so the API and any future
-        Streamlit fallback share the same file."""
+        ``GET /geo/locations`` for the React SPA sidebar lookup. Single source
+        of truth shared by the API and the geocode fallback."""
         return self.data_dir / "locations.json"
 
     @property
@@ -127,40 +126,36 @@ class PathsConfig:
         return self.new_model_dir / "xgb_model.pkl"
 
     @property
-    def new_bigru_model_path(self) -> Path:
-        return self.new_model_dir / "bi_gru_best.pth"
-
-    @property
-    def new_causal_gru_model_path(self) -> Path:
-        """Path to the Causal GRU model (uni-directional, for real-time inference)."""
-        return self.new_model_dir / "causal_gru_best.pth"
-
-    @property
     def new_scaler_path(self) -> Path:
         return self.new_model_dir / "scaler_all.pkl"
 
     @property
-    def new_scaler_raw_path(self) -> Path:
-        """Path to scaler for raw features only (used by Causal GRU)."""
-        return self.new_model_dir / "scaler_raw.pkl"
-
-    @property
-    def new_raw_features_path(self) -> Path:
-        """Path to raw feature column names for Causal GRU."""
-        return self.new_model_dir / "raw_features.json"
-
-    @property
     def new_meta_model_path(self) -> Path:
+        """Meta-learner of the two-leg stack (``LogisticRegressionCV``)."""
         return self.new_model_dir / "stacking_weights.pkl"
-
-    @property
-    def new_meta_scaler_path(self) -> Path:
-        """Path to scaler for meta-features (used by LogisticRegression meta-learner)."""
-        return self.new_model_dir / "meta_scaler.pkl"
 
     @property
     def new_threshold_path(self) -> Path:
         return self.new_model_dir / "threshold_config.json"
+
+    @property
+    def new_calibration_path(self) -> Path:
+        """Path to the stack probability calibrator (P3, V4.2).
+
+        Optional artifact: a fitted ``IsotonicRegression`` mapping raw stack
+        probabilities to calibrated fire frequencies. Absent for 3-leg V4.1
+        bundles — the serving path must treat that as a no-op, not an error.
+        """
+        return self.new_model_dir / "calibration_isotonic.pkl"
+
+    @property
+    def new_manifest_path(self) -> Path:
+        """Training manifest emitted by the retraining notebook (VERSION.json).
+
+        Carries bundle-level metadata (schema, validation status). Absent for
+        legacy bundles — readers must default sensibly.
+        """
+        return self.new_model_dir / "VERSION.json"
 
     @property
     def new_feature_columns_path(self) -> Path:
@@ -204,53 +199,7 @@ class APIConfig:
 
     host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: _get_int_env("API_PORT", 8000))
-    enable_cors: bool = field(
-        default_factory=lambda: os.getenv("ENABLE_CORS", "true").lower() == "true"
-    )
     secret_key: str | None = field(default_factory=lambda: os.getenv("API_SECRET_KEY"))
-
-
-@dataclass
-class FrontendConfig:
-    """Frontend (Streamlit) configuration."""
-
-    port: int = field(default_factory=lambda: _get_int_env("STREAMLIT_PORT", 8501))
-    address: str = field(default_factory=lambda: os.getenv("STREAMLIT_ADDRESS", "localhost"))
-    enable_demo_mode: bool = field(
-        default_factory=lambda: os.getenv("ENABLE_DEMO_MODE", "false").lower() == "true"
-    )
-
-
-@dataclass
-class WeatherAPIConfig:
-    """Weather API configuration."""
-
-    openweather_key: str | None = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY"))
-    openweather_url: str = "https://api.openweathermap.org/data/2.5"
-    bmkg_url: str = "https://api.bmkg.go.id/publik"
-
-    # Audit priority 3 — placeholder strings from .env.example must never be
-    # treated as a valid key. Mirrors the auth.py blacklist pattern so a
-    # forgotten .env copy does not silently make 401/429 routes "look"
-    # configured while every request actually fails upstream.
-    _OWM_PLACEHOLDER_KEYS = frozenset(
-        {
-            "",
-            "demo_key",
-            "your_openweathermap_api_key_here",
-            "your_api_key_here",
-            "changeme",
-            "PLACEHOLDER",
-        }
-    )
-
-    @property
-    def has_openweather_key(self) -> bool:
-        """Check if OpenWeather API key is configured and not a known placeholder."""
-        key = self.openweather_key
-        if key is None:
-            return False
-        return key.strip() not in self._OWM_PLACEHOLDER_KEYS
 
 
 class FireCastConfig:
@@ -271,8 +220,6 @@ class FireCastConfig:
         self.model = ModelConfig()
         self.data = DataConfig()
         self.api = APIConfig()
-        self.frontend = FrontendConfig()
-        self.weather = WeatherAPIConfig()
         self._validate()
 
     def _validate(self):
@@ -294,9 +241,6 @@ class FireCastConfig:
         # resolved lazily on first access by code that actually needs it.
         logger.info("Configuration loaded successfully")
         logger.info(f"Data path: {self.paths.data_path}")
-
-        if not self.weather.has_openweather_key:
-            logger.warning("OpenWeather API key not configured - will use demo/backup data")
 
     @property
     def device_str(self) -> str:
@@ -334,14 +278,6 @@ class FireCastConfig:
             "api": {
                 "host": self.api.host,
                 "port": self.api.port,
-                "enable_cors": self.api.enable_cors,
-            },
-            "frontend": {
-                "port": self.frontend.port,
-                "enable_demo_mode": self.frontend.enable_demo_mode,
-            },
-            "weather": {
-                "has_openweather_key": self.weather.has_openweather_key,
             },
         }
 
@@ -368,9 +304,8 @@ def _init_legacy_vars():
     global CNN_MODEL_PATH, LGBM_MODEL_PATH, SCALER_PATH
     global THRESHOLD_PATH, FEATURE_COLUMNS_PATH
     global NEW_MODEL_DIR, NEW_LGBM_MODEL_PATH, NEW_XGB_MODEL_PATH
-    global NEW_CAUSAL_GRU_MODEL_PATH, NEW_SCALER_PATH, NEW_SCALER_RAW_PATH
-    global NEW_RAW_FEATURES_PATH, NEW_META_MODEL_PATH, NEW_META_SCALER_PATH, NEW_THRESHOLD_PATH
-    global NEW_FEATURE_COLUMNS_PATH
+    global NEW_SCALER_PATH, NEW_META_MODEL_PATH, NEW_THRESHOLD_PATH
+    global NEW_FEATURE_COLUMNS_PATH, NEW_CALIBRATION_PATH, NEW_MANIFEST_PATH
     global TRAIN_SPLIT, LAG, ROLL_WINDOW
     global CNN_DROPOUT, DEVICE, TARGET_RECALL
 
@@ -391,14 +326,12 @@ def _init_legacy_vars():
     NEW_MODEL_DIR = cfg.paths.new_model_dir
     NEW_LGBM_MODEL_PATH = cfg.paths.new_lgbm_model_path
     NEW_XGB_MODEL_PATH = cfg.paths.new_xgb_model_path
-    NEW_CAUSAL_GRU_MODEL_PATH = cfg.paths.new_causal_gru_model_path
     NEW_SCALER_PATH = cfg.paths.new_scaler_path
-    NEW_SCALER_RAW_PATH = cfg.paths.new_scaler_raw_path
-    NEW_RAW_FEATURES_PATH = cfg.paths.new_raw_features_path
     NEW_META_MODEL_PATH = cfg.paths.new_meta_model_path
-    NEW_META_SCALER_PATH = cfg.paths.new_meta_scaler_path
     NEW_THRESHOLD_PATH = cfg.paths.new_threshold_path
     NEW_FEATURE_COLUMNS_PATH = cfg.paths.new_feature_columns_path
+    NEW_CALIBRATION_PATH = cfg.paths.new_calibration_path
+    NEW_MANIFEST_PATH = cfg.paths.new_manifest_path
 
     TRAIN_SPLIT = cfg.data.train_split
     LAG = cfg.data.lag

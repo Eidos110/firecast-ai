@@ -84,6 +84,20 @@ class TestPathSafety(unittest.TestCase):
         # still resolves to an absolute path outside models/.
         self.assertFalse(is_path_within_allowed_roots(evil_path, roots))
 
+    def test_register_rejects_path_outside_roots(self):
+        # CLI callers reach registry.register_model_version directly; the
+        # whitelist must be enforced there too, not only in the HTTP router.
+        from src.models.registry import register_model_version
+
+        self.assertFalse(register_model_version("lgb", "0.0.0", "../evil.pkl"))
+
+    def test_registry_resolves_relative_paths_from_repo_root(self):
+        from src.models.registry import _resolve_registry_path
+
+        resolved = _resolve_registry_path("add_new_model/lgb_model.pkl")
+        self.assertTrue(resolved.is_absolute())
+        self.assertEqual(resolved.parent.name, "add_new_model")
+
     def test_is_path_within_allowed_roots_handles_unresolvable(self):
         # Non-existent path on a non-existent drive — resolve() raises OSError
         # on some platforms but is_path_within_allowed_roots should swallow it.

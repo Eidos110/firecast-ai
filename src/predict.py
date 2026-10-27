@@ -1,14 +1,20 @@
-"""
-FireCast Prediction Module
-==========================
-Functions for running fire risk predictions using the ensemble model.
+"""FireCast prediction service.
+
+Serving contract:
+  * ``model_type="new"`` (default) — V4.2 two-leg stack: LightGBM + XGBoost
+    probabilities combined by a LogisticRegressionCV meta-learner, then
+    isotonic-calibrated. No GRU leg (retired with V4.2).
+  * ``model_type="legacy"`` — CNN + LightGBM mean ensemble under ``models/``.
+
+Both paths raise :class:`PredictionError` on failure; there is no silent
+0.5 fallback anywhere in this module (AGENTS.md §3).
 """
 
+import copy
 import json
 import logging
 import os
 import pickle
-import sys  # for module-global scope access in _init_models()
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,20 +27,13 @@ from src import config
 from src.data_loader import load_data_for_evaluation
 from src.feature_engineering import engineer_features
 
-# ── Lazy torch / model imports ──
-# Railway/CPU envs: PyTorch 1.10.2 fails with
-# "libtorch_cpu.so: cannot enable executable stack".
-# We use lazy imports so the app still starts (in demo mode).
-# Call _init_models() before calling predict functions.
-# Audit Fase 3d: consolidate the torch lazy-loader with the shared one in
-# ``src.utils.lazy``. Previously this module had its own private ``_get_torch``
-# that only caught ``ImportError`` (not ``OSError`` — which is what Railway/
-# HF Spaces raise when the execstack policy blocks ``libtorch_cpu.so``).
-# Adding a try/except shim that returns the pinned shared implementation.
+# Torch is imported lazily so a worker whose sandbox blocks the native
+# ``libtorch_cpu.so`` still boots (legacy inference then fails at request
+# time instead of at import time). The shared loader handles ``ImportError``
+# and ``OSError``.
 from src.utils.lazy import get_torch as _shared_get_torch
 
 _torch = None
-_cnn_module = None
 
 
 def _get_torch():
@@ -42,7 +41,7 @@ def _get_torch():
 
     Delegates to :func:`src.utils.lazy.get_torch` so Railway/HF Spaces
     workers (where ``import torch`` raises ``OSError`` from the execstack
-    block) degrade to demo mode instead of raising.
+    block) still boot and fail the request cleanly instead of the import.
     """
     global _torch
     if _torch is None:
@@ -50,77 +49,7 @@ def _get_torch():
     return _torch
 
 
-def _init_models():
-    """Load all ML model implementations (lazy, fail-safe).
-
-    Returns True if all models loaded, False otherwise (falls back to demo).
-    When successful, registers the loaders in module globals so that
-    load_ensemble_models() and load_stacking_models() can use them directly.
-    """
-    _mod = sys.modules[__name__]
-    try:
-        from src.models.bigru import load_bigru_model, predict_bigru  # noqa: F401
-        from src.models.causal_gru import load_causal_gru_model, predict_causal_gru  # noqa: F401
-        from src.models.cnn import TunedCNN1D, load_cnn_model  # noqa: F401
-        from src.models.ensemble import evaluate_ensemble  # noqa: F401
-        from src.models.lgbm import load_lgbm_model  # noqa: F401
-        from src.models.xgb import load_xgb_model, predict_xgb  # noqa: F401
-
-        # Register in module globals so outer functions can find them
-        _mod.load_cnn_model = load_cnn_model
-        _mod.load_lgbm_model = load_lgbm_model
-        _mod.load_xgb_model = load_xgb_model
-        _mod.predict_xgb = predict_xgb
-        _mod.load_bigru_model = load_bigru_model
-        _mod.predict_bigru = predict_bigru
-        _mod.load_causal_gru_model = load_causal_gru_model
-        _mod.predict_causal_gru = predict_causal_gru
-        _mod.evaluate_ensemble = evaluate_ensemble
-    except Exception as e:
-        logging.getLogger(__name__).warning(
-            f"Model loading failed (likely PyTorch unavailability on Railway): {e}. "
-            "Falling back to demo mode."
-        )
-        return False
-    return True
-
-
 logger = logging.getLogger(__name__)
-
-# Weighted ensemble weights for LGBM+XGB (computed from validation AUCs)
-# From notebook: LGBM AUC=0.8834, XGB AUC=0.8855
-_WEIGHTS_LGBM_XGB = np.array([0.8834, 0.8855])
-_WEIGHTS_LGBM_XGB = _WEIGHTS_LGBM_XGB / _WEIGHTS_LGBM_XGB.sum()
-
-# Flag to enable/disable Causal GRU for AOI predictions (no historical data).
-# Set environment variable USE_CAUSAL_GRU_AOI=false to force disable (fall back
-# to LGBM+XGB). The legacy alias ``USE_BIGRU_AOI`` was removed (audit Fase 1i /
-# AGENTS.md §5C): it only mirrored ``USE_CAUSAL_GRU_AOI`` and the dual-env read
-# ``USE_BIGRU_AOI`` OR ``USE_CAUSAL_GRU_AOI`` made operator behaviour ambiguous.
-USE_CAUSAL_GRU_AOI = os.getenv("USE_CAUSAL_GRU_AOI", "true").lower() != "false"
-
-
-def _safe_divide(
-    numerator: float | np.ndarray, denominator: float | np.ndarray, epsilon: float = 1e-8
-) -> float | np.ndarray:
-    """
-    Safe division to prevent division by zero and numerical overflow.
-
-    Args:
-        numerator: Numerator value(s)
-        denominator: Denominator value(s)
-        epsilon: Small value to add to denominator for numerical stability
-
-    Returns:
-        Result of numerator / (denominator + epsilon), clipped to prevent infinities.
-    """
-    safe_denom = denominator + epsilon
-    result = numerator / safe_denom
-    # Clip extreme values to prevent inf/nan propagation
-    if isinstance(result, np.ndarray):
-        return np.clip(result, -1e10, 1e10)
-    else:
-        return max(min(result, 1e10), -1e10)
 
 
 class PredictionError(Exception):
@@ -193,225 +122,63 @@ def load_ensemble_models(input_dim: int, version: str | None = None) -> tuple[An
     return cnn_model, lgbm_model
 
 
-def load_stacking_models(
-    input_dim: int = 79, raw_feature_indices: list | None = None
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, np.ndarray | None]:
-    """
-    Load new stacking model components (LightGBM, XGBoost, Causal GRU, Meta-learner, scaler_raw, meta_scaler, raw_feature_indices).
+def load_stacking_models() -> tuple[Any, Any, Any]:
+    """Load the active V4.2 stacking bundle (LightGBM + XGBoost + meta).
 
-    Args:
-        input_dim: Number of input features (default 79 for new model)
-        raw_feature_indices: List of column indices for raw features (needed for GRU). If None,
-                             will be loaded from raw_features.json and mapped to indices.
+    The active bundle is the 2-leg cross-section model trained by
+    ``add_new_model/final_modelling_V4.2_crosssection.ipynb``. Its decision
+    path is ``[p_lgbm, p_xgb] -> LogisticRegressionCV -> isotonic``. The GRU
+    leg was retired with V4.2 and no GRU artifacts ship anymore, so this
+    loader deliberately exposes only the two essential base models plus the
+    meta-learner.
 
     Returns:
-        Tuple of (lgbm_model, xgb_model, causal_gru_model, meta_model, scaler_raw, meta_scaler, raw_feature_indices, nnls_weights)
-        where nnls_weights is a numpy array of shape (3,) with weights [GRU, LGBM, XGB] or None if not available.
+        ``(lgbm_model, xgb_model, meta_model)``.
 
     Raises:
-        ModelLoadError: If models cannot be loaded
+        ModelLoadError: if an artifact is missing, unreadable, or the
+            meta-learner was not fitted on exactly two input probabilities.
     """
-    # Lazy imports: mirrors load_ensemble_models() so _init_models() is not
-    # a runtime dependency. Without these, the bare call at lines 277/283/291
-    # raises a NameError when _init_models() has not yet run.
     try:
-        from src.models.causal_gru import load_causal_gru_model, predict_causal_gru  # noqa: F401
-        from src.models.lgbm import load_lgbm_model  # noqa: F401
-        from src.models.xgb import load_xgb_model, predict_xgb  # noqa: F401
-    except ImportError as _e:
-        raise ModelLoadError(
-            f"Cannot import stacking model loaders (torch/model deps missing?): {_e}"
-        )
-    # Register in module globals so predict_stacking / other functions can find them
-    _mod = sys.modules[__name__]
-    _mod.load_lgbm_model = load_lgbm_model
-    _mod.load_xgb_model = load_xgb_model
-    _mod.predict_xgb = predict_xgb
-    _mod.load_causal_gru_model = load_causal_gru_model
-    _mod.predict_causal_gru = predict_causal_gru
-
-    # Load raw feature indices if not provided
-    if raw_feature_indices is None:
-        try:
-            with open(config.NEW_RAW_FEATURES_PATH, encoding="utf-8") as f:
-                raw_features = json.load(f)
-            # Validate raw_features structure
-            if not isinstance(raw_features, list):
-                raise ValueError("raw_features.json must contain a JSON array")
-            if not all(isinstance(item, str) for item in raw_features):
-                raise ValueError("raw_features.json array items must be strings")
-            # Load feature columns to map names to integer indices
-            try:
-                with open(config.NEW_FEATURE_COLUMNS_PATH, encoding="utf-8") as f:
-                    feature_columns = json.load(f)
-                # Validate feature_columns structure
-                if not isinstance(feature_columns, list):
-                    raise ValueError("feature_columns.json must contain a JSON array")
-                if not all(isinstance(item, str) for item in feature_columns):
-                    raise ValueError("feature_columns.json array items must be strings")
-                # Convert raw feature names to column indices
-                raw_feature_indices = [
-                    i for i, col in enumerate(feature_columns) if col in raw_features
-                ]
-                logger.info(
-                    f"Mapped {len(raw_features)} raw features to {len(raw_feature_indices)} column indices"
-                )
-                if len(raw_feature_indices) != len(raw_features):
-                    logger.warning(
-                        f"Some raw features missing from feature_columns: "
-                        f"expected {len(raw_features)}, got {len(raw_feature_indices)}"
-                    )
-            except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError) as e:
-                logger.warning(
-                    f"Could not load feature_columns.json: {e}. Using sequential indices."
-                )
-                # Fallback: assign sequential indices (may be wrong but allows model to load)
-                raw_feature_indices = list(range(len(raw_features)))
-        except (FileNotFoundError, PermissionError, json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                f"Could not load raw_features.json: {e}. Using first {input_dim} features."
-            )
-            raw_feature_indices = list(range(input_dim))
-
-    # Determine causal_gru_input_dim from model_config.json (Bug #5 fix)
-    causal_gru_input_dim = None
-    causal_gru_hidden1 = 64
-    causal_gru_dropout = 0.3
-    try:
-        with open(Path(config.NEW_MODEL_DIR) / "model_config.json", encoding="utf-8") as f:
-            model_config = json.load(f)
-            if not isinstance(model_config, dict):
-                raise ValueError("model_config.json must be a JSON object")
-            causal_gru_config = model_config.get("causal_gru_config", {})
-            if not isinstance(causal_gru_config, dict):
-                raise ValueError("causal_gru_config must be a JSON object")
-            causal_gru_input_dim = causal_gru_config.get("input_dim", 19)
-            causal_gru_hidden1 = causal_gru_config.get("hidden1", 64)
-            causal_gru_dropout = causal_gru_config.get("dropout_rate", 0.3)
-            # Validate types
-            if not isinstance(causal_gru_input_dim, int) or causal_gru_input_dim <= 0:
-                raise ValueError("causal_gru_input_dim must be a positive integer")
-            if not isinstance(causal_gru_hidden1, int) or causal_gru_hidden1 <= 0:
-                raise ValueError("causal_gru_hidden1 must be a positive integer")
-            if not isinstance(causal_gru_dropout, (int, float)) or not (
-                0 <= causal_gru_dropout <= 1
-            ):
-                raise ValueError("causal_gru_dropout must be a number between 0 and 1")
-            logger.info(f"Causal GRU input dimension from config: {causal_gru_input_dim}")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        json.JSONDecodeError,
-        OSError,
-        KeyError,
-        TypeError,
-    ) as e:
-        logger.warning(f"Could not read model_config.json: {e}. Using default input_dim=19.")
-        causal_gru_input_dim = 19
+        from src.models.lgbm import load_lgbm_model
+        from src.models.xgb import load_xgb_model
+    except ImportError as exc:  # pragma: no cover - depends on install
+        raise ModelLoadError(f"Cannot import stacking model loaders: {exc}") from exc
 
     try:
-        logger.info(f"Loading new LGBM model from {config.NEW_LGBM_MODEL_PATH}")
         lgbm_model = load_lgbm_model(model_path=config.NEW_LGBM_MODEL_PATH)
-        logger.info("LGBM model loaded successfully")
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load LGBM model: {e}")
+    except Exception as exc:
+        raise ModelLoadError(f"Failed to load LGBM model: {exc}") from exc
 
     try:
-        logger.info(f"Loading new XGB model from {config.NEW_XGB_MODEL_PATH}")
         xgb_model = load_xgb_model(model_path=config.NEW_XGB_MODEL_PATH)
-        logger.info("XGB model loaded successfully")
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load XGB model: {e}")
+    except Exception as exc:
+        raise ModelLoadError(f"Failed to load XGB model: {exc}") from exc
 
     try:
-        logger.info(f"Loading new Causal GRU model from {config.NEW_CAUSAL_GRU_MODEL_PATH}")
-        causal_gru_model = load_causal_gru_model(
-            causal_gru_input_dim,
-            config.NEW_CAUSAL_GRU_MODEL_PATH,
-            hidden1=causal_gru_hidden1,
-            dropout_rate=causal_gru_dropout,
-        )
-        logger.info("New Causal GRU model loaded successfully")
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load new Causal GRU model: {e}")
-
-    try:
-        logger.info(f"Loading meta-learner from {config.NEW_META_MODEL_PATH}")
         meta_model = joblib.load(config.NEW_META_MODEL_PATH)
-        logger.info("Meta-learner loaded successfully")
+    except Exception as exc:
+        raise ModelLoadError(f"Failed to load meta-learner: {exc}") from exc
 
-        # Validate meta_model type and shape
-        if isinstance(meta_model, np.ndarray):
-            if meta_model.shape != (3,):
-                raise ModelLoadError(
-                    f"Meta-learner NNLS weights have wrong shape: {meta_model.shape}, expected (3,)"
-                )
-            logger.info(
-                f"Meta-learner type: NNLS weights array "
-                f"(GRU={meta_model[0]:.3f}, LGBM={meta_model[1]:.3f}, XGB={meta_model[2]:.3f})"
-            )
-        elif hasattr(meta_model, "predict_proba"):
-            # LogisticRegression / LogisticRegressionCV
-            model_type_name = meta_model.__class__.__name__
-            if hasattr(meta_model, "coef_"):
-                coef = meta_model.coef_[0]
-                logger.info(
-                    f"Meta-learner type: {model_type_name} "
-                    f"(coefs: GRU={coef[0]:.3f}, LGB={coef[1]:.3f}, XGB={coef[2]:.3f}, "
-                    f"intercept={meta_model.intercept_[0]:.3f})"
-                )
-            else:
-                logger.info(f"Meta-learner type: {model_type_name}")
-        else:
-            raise ModelLoadError(
-                f"Unsupported meta-learner type: {type(meta_model).__name__}. "
-                f"Expected numpy array (NNLS weights) or sklearn model with predict_proba."
-            )
-    except ModelLoadError:
-        raise
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load meta-learner: {e}")
+    if not hasattr(meta_model, "predict_proba"):
+        raise ModelLoadError(
+            f"Unsupported meta-learner type {type(meta_model).__name__}: "
+            "expected a scikit-learn classifier with predict_proba()."
+        )
+    if getattr(meta_model, "n_features_in_", None) != 2:
+        raise ModelLoadError(
+            "Meta-learner expects "
+            f"{getattr(meta_model, 'n_features_in_', 'unknown')} input features; "
+            "the V4.2 two-leg bundle must be fitted on [p_lgbm, p_xgb]."
+        )
 
-    try:
-        logger.info(f"Loading new scaler_raw from {config.NEW_SCALER_RAW_PATH}")
-        scaler_raw = joblib.load(config.NEW_SCALER_RAW_PATH)
-        logger.info("New raw scaler loaded successfully")
-    except Exception as e:
-        raise ModelLoadError(f"Failed to load new raw scaler: {e}")
-
-    # Meta-scaler removed to prevent prediction saturation
-    meta_scaler = None
-
-    # Try to load NNLS weights (alternative meta-learner)
-    # These are pre-computed non-negative least squares weights from training
-    nnls_weights = None
-    nnls_weights_path = Path(config.NEW_MODEL_DIR) / "nnls_weights.npy"
-    if os.path.exists(nnls_weights_path):
-        try:
-            nnls_weights = np.load(nnls_weights_path)
-            if nnls_weights.shape == (3,):
-                logger.info(
-                    f"NNLS weights loaded: GRU={nnls_weights[0]:.3f}, LGBM={nnls_weights[1]:.3f}, XGB={nnls_weights[2]:.3f}"
-                )
-            else:
-                logger.warning(f"NNLS weights have wrong shape {nnls_weights.shape}, ignoring.")
-                nnls_weights = None
-        except (OSError, ValueError, np.lib.format.ReadError) as e:
-            logger.warning(f"Could not load NNLS weights: {e}")
-            nnls_weights = None
-    else:
-        logger.debug("NNLS weights not found (optional - uses LogisticRegression instead)")
-
-    return (
-        lgbm_model,
-        xgb_model,
-        causal_gru_model,
-        meta_model,
-        scaler_raw,
-        meta_scaler,
-        raw_feature_indices,
-        nnls_weights,
+    logger.info(
+        "Stacking bundle loaded: LGBM=%s XGB=%s meta=%s",
+        type(lgbm_model).__name__,
+        type(xgb_model).__name__,
+        type(meta_model).__name__,
     )
+    return lgbm_model, xgb_model, meta_model
 
 
 def load_new_model_scaler():
@@ -430,6 +197,64 @@ def load_new_feature_columns() -> list:
     """Load feature columns for new model."""
     with open(config.NEW_FEATURE_COLUMNS_PATH) as f:
         return json.load(f)
+
+
+def load_new_model_calibration():
+    """Load the stack probability calibrator (P3, V4.2 bundle) if present.
+
+    Returns the fitted calibrator (anything exposing ``predict`` mapping raw
+    stack probabilities to calibrated fire frequencies) or ``None`` when the
+    artifact is absent — legacy 3-leg bundles ship without one and serving
+    must treat that as a no-op, not an error.
+
+    Env override: ``FC_DISABLE_CALIBRATION=1`` forces the raw probability
+    (comparison / A-B testing of the calibrated surface).
+    """
+    if os.getenv("FC_DISABLE_CALIBRATION", "").lower() in ("1", "true", "yes"):
+        logger.info("Stack calibration disabled via FC_DISABLE_CALIBRATION")
+        return None
+    path = Path(config.NEW_CALIBRATION_PATH)
+    if not path.exists():
+        return None
+    try:
+        calibrator = joblib.load(path)
+    except Exception as e:
+        logger.warning(f"Failed to load stack calibrator ({e}) — using raw probabilities")
+        return None
+    if not hasattr(calibrator, "predict"):
+        logger.warning(
+            f"Unsupported calibrator type {type(calibrator).__name__} "
+            "(no .predict) — using raw probabilities"
+        )
+        return None
+    logger.info(f"Stack calibrator loaded: {type(calibrator).__name__} from {path}")
+    return calibrator
+
+
+def load_new_model_validation_status() -> str | None:
+    """Read the bundle's own validation status from its training manifest.
+
+    The retraining notebook (V4.2) writes ``VERSION.json`` alongside the
+    models. ``validation_status`` there is the honest verdict of the training
+    methodology ("experimental" while the calibrated bundle is being soaked,
+    "validated" once field-checked). When the manifest is missing (legacy
+    bundles) fall back to the hardcoded honest default — audit 2026-08-23
+    (bug #17): offline validation of that bundle has open methodology issues.
+    """
+    try:
+        with open(Path(config.NEW_MANIFEST_PATH), encoding="utf-8") as f:
+            manifest = json.load(f)
+        status = manifest.get("validation_status")
+        if status in ("experimental", "validated"):
+            return status
+        logger.warning(
+            f"VERSION.json validation_status={status!r} not recognised — defaulting to experimental"
+        )
+    except FileNotFoundError:
+        pass
+    except (PermissionError, json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not read VERSION.json ({e}) — defaulting to experimental")
+    return "experimental"
 
 
 def predict_batch(
@@ -506,11 +331,6 @@ def predict_batch(
     return cnn_probs, lgbm_probs
 
 
-def load_meta_scaler() -> Any:
-    """Load scaler for meta-features (used by LogisticRegression meta-learner)."""
-    return joblib.load(config.NEW_META_SCALER_PATH)
-
-
 # ---------------------------------------------------------------------------
 # LGBM-safe prediction helper
 # ---------------------------------------------------------------------------
@@ -548,15 +368,20 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray) -> np.ndarray:
             is_booster = False
 
         if is_booster:
-            raw = lgbm_model.predict(X)
-            if raw is None:
-                raise RuntimeError("Booster.predict() returned None")
-            # Booster.predict returns raw margins → sigmoid → [0,1]
-            if np.issubdtype(np.asarray(raw).dtype, np.floating):
-                probs = 1.0 / (1.0 + np.exp(-np.asarray(raw, dtype=float)))
-            else:
-                probs = np.clip(np.asarray(raw, dtype=float), 0.0, 1.0)
-            logger.info(f"LGBM Booster → raw margin range [{probs.min():.4f}, {probs.max():.4f}]")
+            # ``Booster.predict`` already applies the objective link (sigmoid
+            # for binary), so its default output is a PROBABILITY. Squashing
+            # it again would pull every score toward 0.5 (e.g. 0.93 → 0.72)
+            # and silently corrupt the stack. Ask for the raw margin
+            # explicitly and apply the sigmoid exactly once.
+            try:
+                raw_margin = lgbm_model.predict(X, raw_score=True)
+            except TypeError:  # very old Booster without raw_score
+                probs = np.asarray(lgbm_model.predict(X), dtype=float)
+                return np.clip(probs, 0.0, 1.0)
+            if raw_margin is None:
+                raise RuntimeError("Booster.predict(raw_score=True) returned None")
+            probs = 1.0 / (1.0 + np.exp(-np.asarray(raw_margin, dtype=float)))
+            logger.info(f"LGBM Booster → probability range [{probs.min():.4f}, {probs.max():.4f}]")
             return np.clip(probs, 0.0, 1.0)
 
         # ── Path B: sklearn-compatible LGBMClassifier / wrapper ───────────
@@ -577,7 +402,18 @@ def _safe_lgbm_predict(lgbm_model: Any, X: np.ndarray) -> np.ndarray:
                 if arr.min() < -0.1 or arr.max() > 1.1:
                     arr = 1.0 / (1.0 + np.exp(-arr))
                 return np.clip(arr, 0.0, 1.0)
+            raise RuntimeError("LightGBM .predict() returned None")
 
+        # No usable prediction method: fail loudly instead of falling off the
+        # end of the function (which used to return ``None`` and surface later
+        # as a confusing ``AttributeError: 'NoneType' has no attribute min``).
+        raise RuntimeError(
+            f"Unsupported LightGBM model object {type(lgbm_model).__name__}: "
+            "expected predict_proba() or predict()."
+        )
+
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("_safe_lgbm_predict: all LGBM prediction paths failed: %s", e, exc_info=True)
         # NEVER return a silent 0.5 (AGENTS.md §3, bug #3). Raise so the caller
@@ -589,247 +425,69 @@ def predict_stacking(
     X: np.ndarray,
     lgbm_model: Any | None = None,
     xgb_model: Any | None = None,
-    causal_gru_model: Any | None = None,
     meta_model: Any | None = None,
-    scaler_raw: Any | None = None,
-    meta_scaler: Any | None = None,
-    raw_feature_indices: list | None = None,
-    use_causal_gru: bool = True,
-    seq_len: int = 7,
-    nnls_weights: np.ndarray | None = None,
 ) -> np.ndarray:
-    """
-    Run batch prediction using new stacking model (LGB + XGB + Causal GRU + NNLS meta).
-
-    IMPORTANT: The Causal GRU requires raw features (not engineered). This function
-    will extract raw features from X using raw_feature_indices.
+    """Combine the two base learners with the trained two-leg meta-learner.
 
     Args:
-        X: Input features (n_samples, n_features) - ALL engineered features
-        lgbm_model: Pre-loaded LightGBM model (optional)
-        xgb_model: Pre-loaded XGBoost model (optional)
-        causal_gru_model: Pre-loaded Causal GRU model (optional)
-        meta_model: Pre-loaded meta-learner weights (NNLS) as numpy array of shape (3,), or
-                   a sklearn model with predict_proba method
-        scaler_raw: Fitted StandardScaler for raw features (required if use_causal_gru=True)
-        raw_feature_indices: List of column indices (integers) for raw features. If None,
-                            will be loaded from raw_features.json and mapped via feature_columns.
-        use_causal_gru: If False, skip Causal GRU and use weighted LGBM+XGB ensemble.
-        seq_len: Sequence length for GRU (default 7, from training config).
+        X: Scaled engineered feature matrix, shape ``(n_samples, 34)``.
+        lgbm_model: Optional pre-loaded LightGBM leg.
+        xgb_model: Optional pre-loaded XGBoost leg.
+        meta_model: Optional pre-loaded meta-learner (LogisticRegressionCV).
+
+    Missing legs are loaded from the active bundle. Supplied models are never
+    replaced, which keeps test stubs and alternate bundles working.
 
     Returns:
-        Array of ensemble probabilities aligned to input samples:
-        - If use_causal_gru=False: shape (n_samples,), values in [0,1]
-        - If use_causal_gru=True: shape (n_samples,) with first (seq_len-1) elements = NaN,
-          and valid predictions from index (seq_len-1) onward.
+        Calibrated-agnostic stack probability array of shape ``(n_samples,)``.
+        The isotonic calibrator is applied by :func:`predict_fire_risk`, which
+        owns the threshold decision.
 
     Raises:
-        ValueError: If raw_feature_indices conversion fails or Causal GRU fails due to
-                    insufficient samples (n_samples < seq_len) when use_causal_gru=True.
+        ModelLoadError: if a missing leg cannot be loaded.
+        RuntimeError: if a base model or the meta-learner fails. Never falls
+            back to a silent 0.5 (AGENTS.md §3).
     """
-    # Load all models if not provided
-    if (
-        lgbm_model is None
-        or xgb_model is None
-        or causal_gru_model is None
-        or meta_model is None
-        or scaler_raw is None
-        or raw_feature_indices is None
-    ):
-        (
-            lgbm_model,
-            xgb_model,
-            causal_gru_model,
-            meta_model,
-            scaler_raw,
-            meta_scaler,
-            raw_feature_indices,
-            loaded_nnls_weights,
-        ) = load_stacking_models(X.shape[1])
-        # If caller didn't provide nnls_weights, use the one just loaded (if any)
-        if nnls_weights is None:
-            nnls_weights = loaded_nnls_weights
+    # Local import keeps the legacy ``predict`` module import torch-free and
+    # avoids depending on module-global registration side effects.
+    from src.models.xgb import predict_xgb
 
-    # Validate raw_feature_indices type - convert string names to int indices if needed
-    if (
-        raw_feature_indices is not None
-        and len(raw_feature_indices) > 0
-        and not isinstance(raw_feature_indices[0], (int, np.integer))
-    ):
-        # Convert feature names to column indices using feature_columns
-        try:
-            feature_columns = load_new_feature_columns()
-            raw_feature_indices = [
-                i for i, col in enumerate(feature_columns) if col in raw_feature_indices
-            ]
-            logger.info(f"Converted {len(raw_feature_indices)} raw feature names to indices")
-            if len(raw_feature_indices) == 0:
-                raise ValueError("No raw features found in feature_columns.json")
-        except Exception as e:
-            logger.error(f"Failed to convert raw feature names to indices: {e}")
-            raise ValueError(
-                "raw_feature_indices conversion failed. Check raw_features.json and feature_columns.json."
-            ) from e
+    if lgbm_model is None or xgb_model is None or meta_model is None:
+        loaded_lgbm, loaded_xgb, loaded_meta = load_stacking_models()
+        if lgbm_model is None:
+            lgbm_model = loaded_lgbm
+        if xgb_model is None:
+            xgb_model = loaded_xgb
+        if meta_model is None:
+            meta_model = loaded_meta
 
-    # If Causal GRU disabled, use weighted LGBM+XGB ensemble (full length)
-    if not use_causal_gru:
-        logger.info("Causal GRU disabled - using LGBM+XGB weighted ensemble")
-        lgbm_probs = _safe_lgbm_predict(lgbm_model, X)
-        logger.info(
-            f"LGBM RAW probs: min={lgbm_probs.min():.4f}, max={lgbm_probs.max():.4f}, mean={lgbm_probs.mean():.4f}, std={lgbm_probs.std():.4f}"
+    expected_legs = getattr(meta_model, "n_features_in_", None)
+    if expected_legs != 2:
+        raise ValueError(
+            "meta_model must take exactly [p_lgbm, p_xgb] (2 features); "
+            f"got n_features_in_={expected_legs!r}. The GRU leg was retired."
         )
-        xgb_probs = predict_xgb(xgb_model, X)
-        logger.info(
-            f"XGB RAW probs: min={xgb_probs.min():.4f}, max={xgb_probs.max():.4f}, mean={xgb_probs.mean():.4f}, std={xgb_probs.std():.4f}"
-        )
-        w = _WEIGHTS_LGBM_XGB
-        ensemble_probs = w[0] * lgbm_probs + w[1] * xgb_probs
-        logger.info(
-            f"LGBM+XGB ensemble: min={ensemble_probs.min():.4f}, max={ensemble_probs.max():.4f}, mean={ensemble_probs.mean():.4f}, std={ensemble_probs.std():.4f}"
-        )
-        # Return padded array for consistency with full stacking mode
-        padded_output = np.full(X.shape[0], np.nan, dtype=float)
-        padded_output[:] = ensemble_probs  # All predictions are valid in LGBM+XGB mode
-        return padded_output
 
-    # Full stacking with Causal GRU
-    logger.info("Running LightGBM stacking predictions...")
-    lgbm_probs_full = _safe_lgbm_predict(lgbm_model, X)
+    lgbm_probs = _safe_lgbm_predict(lgbm_model, X)
+    xgb_probs = predict_xgb(xgb_model, X)
+
+    if lgbm_probs.shape[0] != X.shape[0] or xgb_probs.shape[0] != X.shape[0]:
+        raise RuntimeError(
+            "Base-learner output length mismatch: "
+            f"X={X.shape[0]}, lgbm={lgbm_probs.shape[0]}, xgb={xgb_probs.shape[0]}"
+        )
+
+    meta_features = np.column_stack([lgbm_probs, xgb_probs])
+    ensemble_probs = np.asarray(meta_model.predict_proba(meta_features)[:, 1], dtype=float)
+    ensemble_probs = np.clip(ensemble_probs, 0.0, 1.0)
+
     logger.info(
-        f"LightGBM RAW probs: min={lgbm_probs_full.min():.4f}, max={lgbm_probs_full.max():.4f}, mean={lgbm_probs_full.mean():.4f}, std={lgbm_probs_full.std():.4f}"
+        "2-leg stack: LGBM mean=%.4f XGB mean=%.4f -> meta mean=%.4f",
+        float(np.mean(lgbm_probs)),
+        float(np.mean(xgb_probs)),
+        float(np.mean(ensemble_probs)),
     )
-
-    logger.info("Running XGBoost stacking predictions...")
-    xgb_probs_full = predict_xgb(xgb_model, X)
-    logger.info(
-        f"XGBoost RAW probs: min={xgb_probs_full.min():.4f}, max={xgb_probs_full.max():.4f}, mean={xgb_probs_full.mean():.4f}, std={xgb_probs_full.std():.4f}"
-    )
-
-    logger.info("Running Causal GRU stacking predictions...")
-    # Predict using Causal GRU - returns array of length (n_samples - seq_len + 1)
-    # or length 1 if input was synthesized for single-sample prediction.
-    gru_probs = predict_causal_gru(
-        causal_gru_model,
-        X,
-        scaler_raw,
-        raw_feature_indices,
-        seq_len=seq_len,
-    )
-    logger.info(
-        f"Causal GRU probs: min={gru_probs.min():.4f}, max={gru_probs.max():.4f}, mean={gru_probs.mean():.4f}, std={gru_probs.std():.4f}"
-    )
-
-    # Align predictions:
-    # For multi-sample inputs (n_samples >= seq_len):
-    #   GRU predicts for samples [seq_len-1:], tree models predict all n_samples.
-    #   Trim tree predictions to match GRU output length.
-    # For single-sample inputs (n_samples < seq_len, synthesized sequence):
-    #   GRU returns 1 prediction, tree models also return 1 prediction.
-    #   No trimming needed.
-    n_samples = X.shape[0]
-    if n_samples >= seq_len:
-        effective_start = seq_len - 1
-        lgbm_probs_aligned = lgbm_probs_full[effective_start:]
-        xgb_probs_aligned = xgb_probs_full[effective_start:]
-    else:
-        # Single-sample case: no alignment needed, all models return 1 prediction
-        effective_start = 0
-        lgbm_probs_aligned = lgbm_probs_full
-        xgb_probs_aligned = xgb_probs_full
-
-    # Ensure lengths match (safety check)
-    min_len = min(len(gru_probs), len(lgbm_probs_aligned), len(xgb_probs_aligned))
-    if len(gru_probs) != len(lgbm_probs_aligned) or len(gru_probs) != len(xgb_probs_aligned):
-        logger.warning(
-            f"Length mismatch: GRU={len(gru_probs)}, LGBM={len(lgbm_probs_aligned)}, XGB={len(xgb_probs_aligned)}. Trimming to {min_len}."
-        )
-        gru_probs = gru_probs[:min_len]
-        lgbm_probs_aligned = lgbm_probs_aligned[:min_len]
-        xgb_probs_aligned = xgb_probs_aligned[:min_len]
-
-    # Apply meta-learner to combine base model predictions
-    # Standardize meta-features if scaler is available (meta_scaler disabled to avoid saturation)
-    meta_features = np.column_stack([gru_probs, lgbm_probs_aligned, xgb_probs_aligned])
-    if meta_scaler is not None:
-        logger.warning(
-            "meta_scaler is not None - this may cause prediction saturation. Consider setting meta_scaler=None."
-        )
-        meta_features_scaled = meta_scaler.transform(meta_features)
-    else:
-        meta_features_scaled = meta_features
-
-    # Decide whether to use NNLS weights instead of LogisticRegressionCV
-    use_nnls = os.getenv("USE_NNLS_META", "false").lower() == "true"
-    if use_nnls and nnls_weights is not None and len(nnls_weights) == 3:
-        logger.info("Using NNLS meta-learner (non-negative least squares weights)")
-        ensemble_short = (
-            nnls_weights[0] * gru_probs
-            + nnls_weights[1] * lgbm_probs_aligned
-            + nnls_weights[2] * xgb_probs_aligned
-        )
-    elif hasattr(meta_model, "predict_proba"):
-        # LogisticRegression / LogisticRegressionCV path (new meta-learner)
-        try:
-            ensemble_short = meta_model.predict_proba(meta_features_scaled)[:, 1]
-            coef = meta_model.coef_[0] if hasattr(meta_model, "coef_") else None
-            intercept = meta_model.intercept_[0] if hasattr(meta_model, "intercept_") else None
-            logger.info(
-                f"LogisticRegression meta-learner applied "
-                f"(coefs: GRU={coef[0]:.3f}, LGB={coef[1]:.3f}, XGB={coef[2]:.3f}, "
-                f"intercept={intercept:.3f}): "
-                f"min={ensemble_short.min():.4f}, max={ensemble_short.max():.4f}, "
-                f"mean={ensemble_short.mean():.4f}, std={ensemble_short.std():.4f}"
-            )
-        except (AttributeError, RuntimeError, ValueError, TypeError) as e:
-            logger.warning(
-                f"LogisticRegression meta-learner failed: {e}. Falling back to NNLS/simple average."
-            )
-            ensemble_short = (gru_probs + lgbm_probs_aligned + xgb_probs_aligned) / 3.0
-    elif isinstance(meta_model, np.ndarray):
-        # NNLS weights path (legacy backward compatibility)
-        weights = meta_model
-
-        # Validate shape
-        if weights.shape != (3,):
-            logger.warning(f"NNLS weights shape {weights.shape} != (3,). Using simple average.")
-            ensemble_short = (gru_probs + lgbm_probs_aligned + xgb_probs_aligned) / 3.0
-        else:
-            # Warn about degenerate weights (e.g., [0, 0, 1] means only XGB is used)
-            zero_count = np.sum(weights < 0.01)
-            if zero_count >= 2:
-                dominant_idx = np.argmax(weights)
-                model_names = ["Causal GRU", "LightGBM", "XGBoost"]
-                logger.warning(
-                    f"DEGENERATE stacking weights: {weights}. "
-                    f"Only {model_names[dominant_idx]} contributes (weight={weights[dominant_idx]:.3f}). "
-                    f"Consider retraining the meta-learner."
-                )
-
-            ensemble_short = (
-                weights[0] * gru_probs
-                + weights[1] * lgbm_probs_aligned
-                + weights[2] * xgb_probs_aligned
-            )
-            logger.info(
-                f"NNLS stacking (GRU={weights[0]:.3f}, LGBM={weights[1]:.3f}, XGB={weights[2]:.3f}): "
-                f"min={ensemble_short.min():.4f}, max={ensemble_short.max():.4f}, "
-                f"mean={ensemble_short.mean():.4f}, std={ensemble_short.std():.4f}"
-            )
-    else:
-        # Unknown meta-model type: simple average
-        logger.warning(f"Unknown meta-model type: {type(meta_model)}. Using simple average.")
-        ensemble_short = (gru_probs + lgbm_probs_aligned + xgb_probs_aligned) / 3.0
-
-    # Pad the beginning with NaN to align with original input length
-    padded_output = np.full(X.shape[0], np.nan, dtype=float)
-    padded_output[effective_start : effective_start + len(ensemble_short)] = ensemble_short
-
-    # Ensure output probabilities are in valid range
-    valid_mask = ~np.isnan(padded_output)
-    if np.any(valid_mask):
-        padded_output[valid_mask] = np.clip(padded_output[valid_mask], 0.0, 1.0)
-
-    return padded_output
+    return ensemble_probs
 
 
 def predict_fire_risk(
@@ -863,7 +521,7 @@ def predict_fire_risk(
             keyed by ``(features, model_version, model_type)`` when available.
             Default False to preserve deterministic behaviour for callers
             that re-mutate the returned dict (e.g. test_prediction). Set
-            True only at idempotent call sites (Streamlit rerun, REST GET).
+            True only at idempotent call sites (REST /predict, AOI reruns).
         reference_date: Optional explicit anchor date for temporal feature
             derivations (``month``, ``day``, ``doy``). ROADMAP §3-W1 feeds
             the SPA Header date-scrubber through this parameter so the
@@ -898,11 +556,17 @@ def predict_fire_risk(
                 "features": features,
                 "model_version": model_version,
                 "model_type": model_type,
+                # Seasonal features (month/day/doy) depend on this anchor;
+                # omitting it served yesterday's-date score for a replay.
+                "reference_date": reference_date.isoformat() if reference_date else None,
             }
             hit, cached = cache_get(_cache_key)
             if hit:
                 logger.debug("predict_fire_risk cache hit")
-                return cached
+                # Return a copy: AOI batch mutates the result with lat/lon/row/
+                # col, and mutating the cached object would leak those fields
+                # into later single-point responses for the same key.
+                return copy.deepcopy(cached)
         except Exception as e:  # pragma: no cover — cache must never block
             logger.debug("cache_get skipped: %s", e)
     try:
@@ -993,118 +657,60 @@ def predict_fire_risk(
                 "model_type": model_name_used,
             }
         else:
-            # Use new stacking model (Causal GRU + LGBM + XGB + NNLS).
-            # ``reference_date`` mirrors the legacy branch (ROADMAP §3-W1).
-            feature_vector = _create_feature_vector(
-                features,
-                use_new_features=True,
-                reference_date=reference_date,
-            )
-            logger.info(f"Feature vector shape: {feature_vector.shape}")
-            logger.info(f"Feature vector (first 10): {feature_vector[0][:10]}")
-            logger.info(f"Feature vector (last 10): {feature_vector[0][-10:]}")
+            # Active serving path: V4.2 two-leg cross-section stack. LGBM and
+            # XGBoost probabilities are combined by a LogisticRegressionCV
+            # meta-learner; the isotonic calibrator is applied below. The GRU
+            # leg was retired with V4.2, so no sequence/raw-feature plumbing
+            # remains in the serving contract. ``feature_vector`` was built by
+            # the shared call above with ``use_new_features=True``.
+            logger.info("Feature vector shape: %s", feature_vector.shape)
 
-            # Load scaler for all engineered features
+            new_feature_cols = load_new_feature_columns()
             try:
                 new_scaler = load_new_model_scaler()
-                feature_vector_scaled = new_scaler.transform(feature_vector)
-                logger.info(f"Scaled feature vector (first 10): {feature_vector_scaled[0][:10]}")
-            except Exception as e:
-                logger.warning(f"Could not load new scaler: {e}, using unscaled features")
+                # ``scaler_all.pkl`` was fitted on a named DataFrame. Passing a
+                # bare ndarray still works (same order) but emits a sklearn
+                # warning on every request; passing the frame keeps the column
+                # order explicit and validated by sklearn itself.
+                if feature_vector.shape[1] == len(new_feature_cols):
+                    scaler_input = pd.DataFrame(feature_vector, columns=new_feature_cols)
+                else:
+                    scaler_input = feature_vector
+                feature_vector_scaled = new_scaler.transform(scaler_input)
+            except Exception as exc:
+                logger.warning("Could not load new scaler (%s); using raw features", exc)
                 feature_vector_scaled = feature_vector
 
-            # Load stacking models including Causal GRU and raw scaler
-            # Returns: lgbm, xgb, gru, meta, scaler_raw, meta_scaler, raw_indices, nnls_weights
-            (
-                lgbm_model,
-                xgb_model,
-                causal_gru_model,
-                meta_model,
-                scaler_raw,
-                meta_scaler,
-                raw_feature_indices,
-                nnls_weights,
-            ) = load_stacking_models()
-
-            # Validate raw_feature_indices - must not be empty
-            if raw_feature_indices is None or len(raw_feature_indices) == 0:
-                raise ValueError(
-                    "No raw feature indices available. Cannot run Causal GRU model. "
-                    "Check that raw_features.json and feature_columns.json exist and are valid."
-                )
-            else:
-                logger.info(f"Using {len(raw_feature_indices)} raw feature indices for Causal GRU")
-
-            # Determine if Causal GRU should be used
-            # Default: True (use Causal GRU). Set USE_CAUSAL_GRU_AOI=false to disable.
-            use_causal_gru_flag = USE_CAUSAL_GRU_AOI
-
-            # Get ensemble probability array
-            try:
-                ensemble_probs = predict_stacking(
+            lgbm_model, xgb_model, meta_model = load_stacking_models()
+            ensemble_prob = float(
+                predict_stacking(
                     feature_vector_scaled,
-                    lgbm_model,
-                    xgb_model,
-                    causal_gru_model=causal_gru_model,
+                    lgbm_model=lgbm_model,
+                    xgb_model=xgb_model,
                     meta_model=meta_model,
-                    scaler_raw=scaler_raw,
-                    meta_scaler=meta_scaler,
-                    raw_feature_indices=raw_feature_indices,
-                    use_causal_gru=use_causal_gru_flag,
-                    seq_len=7,
-                    nnls_weights=nnls_weights,
-                )
-            except ValueError as e:
-                # Causal GRU requires minimum seq_len samples; fall back to LGBM+XGB
-                if "Not enough samples" in str(e) or "sequence length" in str(e).lower():
-                    logger.warning(
-                        f"Causal GRU cannot run (single sample or too few): {e}. Using LGBM+XGB ensemble."
-                    )
-                    use_causal_gru_flag = False
-                    ensemble_probs = predict_stacking(
-                        feature_vector_scaled,
-                        lgbm_model,
-                        xgb_model,
-                        causal_gru_model=causal_gru_model,
-                        meta_model=meta_model,
-                        scaler_raw=scaler_raw,
-                        meta_scaler=meta_scaler,
-                        raw_feature_indices=raw_feature_indices,
-                        use_causal_gru=False,
-                        seq_len=7,
-                        nnls_weights=nnls_weights,
-                    )
-                else:
-                    raise
-
-            # For single-sample input, extract the first valid (non-NaN) probability.
-            # When use_causal_gru=False, result has no NaNs and length=1 -> take element 0.
-            # When use_causal_gru=True, first (seq_len-1) positions are NaN, first valid at index seq_len-1.
-            valid_mask = ~np.isnan(ensemble_probs)
-            if np.any(valid_mask):
-                ensemble_prob = float(ensemble_probs[valid_mask][0])
-            else:
-                logger.error(
-                    f"All ensemble predictions are NaN. Input shape: {feature_vector_scaled.shape}, "
-                    f"use_causal_gru: {use_causal_gru_flag}, raw indices valid: {raw_feature_indices is not None and len(raw_feature_indices) > 0}"
-                )
-                # Try fallback to LGBM prediction (Audi Fase 1i: route through
-                # ``_safe_lgbm_predict`` so the same robustness path is used
-                # everywhere, instead of a bare ``lgbm_model.predict`` here).
-                try:
-                    lgbm_fallback = _safe_lgbm_predict(lgbm_model, feature_vector_scaled)
-                    ensemble_prob = float(np.atleast_1d(lgbm_fallback)[0])
-                    logger.warning(f"Used LGBM fallback prediction: {ensemble_prob:.4f}")
-                except Exception as fallback_err:
-                    logger.error(f"LGBM fallback also failed: {fallback_err}")
-                    raise ValueError(
-                        "All ensemble predictions are NaN and fallback prediction failed"
-                    )
-
-            logger.info(
-                f"Final ensemble_prob={ensemble_prob:.4f} (from {np.sum(valid_mask)} valid predictions, "
-                f"raw array={ensemble_probs})"
+                )[0]
             )
+            logger.info("Stack probability: %.4f", ensemble_prob)
+
+            # --- Stack calibration (P3, V4.2) ---
+            # Raw stack probabilities under-predict fire frequency by ~0.05-0.15
+            # across every reliability bin (reliability audit 2026-08-29). The
+            # isotonic calibrator is fitted on VAL inside the retraining notebook
+            # and shipped as ``calibration_isotonic.pkl``. Absent file = legacy
+            # bundle = no-op. Applied BEFORE the env-tunable temperature/cap
+            # knobs so those remain ops levers on the calibrated surface.
+            stack_calibrator = load_new_model_calibration()
+            if stack_calibrator is not None:
+                calibrated = float(
+                    np.atleast_1d(stack_calibrator.predict(np.array([ensemble_prob], dtype=float)))[
+                        0
+                    ]
+                )
+                logger.info(
+                    f"Stack calibration applied: {ensemble_prob:.4f} -> {calibrated:.4f} "
+                    f"({type(stack_calibrator).__name__})"
+                )
+                ensemble_prob = calibrated
 
             # --- Calibration: Temperature scaling & probability capping ---
             # Temperature scaling reduces overconfidence by scaling logits before sigmoid.
@@ -1126,8 +732,7 @@ def predict_fire_risk(
                 ensemble_prob = max_prob
             # --- End calibration ---
 
-            new_threshold = load_new_model_threshold()
-            logger.info(f"Model threshold: {new_threshold:.4f}")
+            decision_threshold = load_new_model_threshold()
 
             cnn_prob = float(ensemble_prob)  # For stacking model, CNN prob = ensemble prob
             lgbm_prob = float(ensemble_prob)  # For stacking model, LGBM prob = ensemble prob
@@ -1136,7 +741,6 @@ def predict_fire_risk(
 
             shap_explanation = {}
             try:
-                new_feature_cols = load_new_feature_columns()
                 shap_explanation = _compute_shap_explanation(
                     features,
                     lgbm_model,
@@ -1170,6 +774,16 @@ def predict_fire_risk(
                 "timestamp": pd.Timestamp.now().isoformat(),
                 "status": "success",
                 "model_type": model_name_used,
+                # Binary decision cut-off fitted on the calibrated scale
+                # (threshold_config.json). ``risk_level`` stays the four-band
+                # UI taxonomy and is not derived from this value.
+                "decision_threshold": float(decision_threshold),
+                # Audit 2026-08-23 (bug #17) / P3 2026-08-29: the badge is
+                # data-driven from the bundle's own manifest (``validation_status``
+                # in VERSION.json, written by the retraining notebook). V4.1
+                # bundles (no manifest) honestly default to "experimental".
+                # The SPA renders it as an "experimental" badge.
+                "model_validation_status": load_new_model_validation_status(),
             }
 
             logger.info(
@@ -1184,8 +798,11 @@ def predict_fire_risk(
                             "features": features,
                             "model_version": model_version,
                             "model_type": model_type,
+                            "reference_date": (
+                                reference_date.isoformat() if reference_date else None
+                            ),
                         },
-                        result,
+                        copy.deepcopy(result),
                     )
                 except Exception as e:  # pragma: no cover — never block on write
                     logger.debug("cache_set skipped: %s", e)
@@ -1380,6 +997,8 @@ def main():
         cnn_probs, lgbm_probs = predict_batch(X_test_scaled, cnn_model, lgbm_model)
 
         logger.info("\n⚡ Evaluating ensemble...")
+        from src.models.ensemble import evaluate_ensemble
+
         evaluate_ensemble(y_test.values, cnn_probs, lgbm_probs)
 
     except Exception as e:

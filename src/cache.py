@@ -1,10 +1,10 @@
 """Lightweight, sandbox-safe request-level caching helpers.
 
-Audit priority 2 — avoids double-compute for /predict, /weather, and other
-read-heavy endpoints that may be hit repeatedly with the same arguments
-inside the same Python process (e.g. during a Streamlit rerun storm or a
-load-balanced worker reuse). All caches here are bounded TTL caches so they
-do not grow unbounded across long-running workers.
+Avoids double-compute for /predict and other read-heavy endpoints that may
+be hit repeatedly with the same arguments inside the same Python process
+(e.g. the SPA re-running an inference while a user scrubs the date, or AOI
+reruns). All caches here are bounded TTL caches so they do not grow
+unbounded across long-running workers.
 
 This module MUST be import-safe without optional dependencies:
 - ``cachetools`` is in ``requirements.txt`` (alphabetical dependency, not
@@ -37,7 +37,7 @@ except Exception:  # pragma: no cover — sandbox without cachetools
 # A small bounded TTL cache for *scalar/hashable* prediction payloads.
 # 256 slots × 5-minute TTL is enough to absorb a typical AOI rerun burst
 # (most fire-risk requests share the same lat/lon/weather slice during a
-# single Streamlit session) without masking genuine weather drift.
+# single SPA session) without masking genuine weather drift.
 # ---------------------------------------------------------------------------
 _PRED_CACHE_MAX_SLOTS = 256
 _PRED_CACHE_TTL_SEC = 300  # 5 minutes
@@ -157,7 +157,7 @@ def cached(func: Callable[..., Any]) -> Callable[..., Any]:
     Use only on side-effect-free functions whose return value is JSON-ish
     (dict/list/number/str — no numpy arrays). Good for ``run_prediction``
     wrappers in the frontend tier; do NOT apply to functions that mutate
-    model state or that rely on Streamlit session_state.
+    model state or that depend on request-scoped state.
     """
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:

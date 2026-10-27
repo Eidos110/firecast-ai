@@ -45,7 +45,7 @@ COPY frontend_react/ ./
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-# Stage 1 — Python runtime (base target, used by render.yaml / docker-compose)
+# Stage 1 — Python runtime (base target used by docker-compose and HF Spaces)
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS base
 
@@ -89,14 +89,9 @@ RUN pip install --no-cache-dir \
 # ---------------------------------------------------------------------------
 COPY . .
 
-# Use the sample CSV fallback if the real processed features file is absent
-# (Hugging Face Spaces ships without the heavy dataset).
-RUN mkdir -p /app/models /app/data && \
-    if [ -f /app/data/sample_data_hf.csv ] && \
-       [ ! -f /app/data/processed_firecast_features_v3.csv ]; then \
-        cp /app/data/sample_data_hf.csv /app/data/processed_firecast_features_v3.csv; \
-        echo "[FireCast] Using sample data for Hugging Face Spaces"; \
-    fi
+# Runtime data/model directories may be mounted by the host; creating them
+# here keeps the first boot from failing on a fresh volume.
+RUN mkdir -p /app/models /app/data
 
 # ---------------------------------------------------------------------------
 # Copy the React SPA build produced in stage 0
@@ -105,14 +100,15 @@ COPY --from=spa-build /spa/build /app/frontend_react/build
 
 # ---------------------------------------------------------------------------
 # Environment defaults (override at runtime)
+#
+# ALLOWED_ORIGINS is deliberately not set: the SPA is served same-origin by
+# this container, and third-party browser clients should opt in explicitly at
+# deploy time. Unset → src/geo_api.py uses its localhost dev allowlist.
 # ---------------------------------------------------------------------------
 ENV PYTHONPATH=/app \
     PORT=7860 \
     HOST=0.0.0.0 \
-    ENABLE_DEMO_MODE=true \
-    ML_DEVICE=cpu \
-    ENABLE_CORS=true \
-    ALLOWED_ORIGINS="*"
+    ML_DEVICE=cpu
 
 EXPOSE 7860
 
