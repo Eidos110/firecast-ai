@@ -125,9 +125,10 @@ class TestObservabilityNoOp(unittest.TestCase):
 class TestObservabilityFakeInit(unittest.TestCase):
     """Init with a fake-looking DSN exercises code paths without SDK installed.
 
-    In the local sandbox, sentry_sdk / opentelemetry are not installed, so
-    init() returns disabled=True (libs missing) rather than enabled=True.
-    This test ensures the guarded ``try/except`` block does not raise.
+    SDK availability differs per environment (CI installs sentry-sdk and
+    opentelemetry, a bare sandbox does not), so these assertions only pin the
+    safe contract: init() never raises and always returns boolean capability
+    flags, and the helpers stay callable afterwards.
     """
 
     def setUp(self):
@@ -150,9 +151,11 @@ class TestObservabilityFakeInit(unittest.TestCase):
         from src.observability import init_observability
 
         result = init_observability()
-        # Both must be False in the sandbox (libs not installed).
-        self.assertFalse(result["sentry"])
-        self.assertFalse(result["opentelemetry"])
+        # Capability flags depend on the environment: CI installs sentry-sdk and
+        # opentelemetry (both True), a bare sandbox does not (both False). The
+        # contract we actually rely on is "returns booleans, never raises".
+        self.assertIsInstance(result["sentry"], bool)
+        self.assertIsInstance(result["opentelemetry"], bool)
 
     def test_helpers_safe_after_failed_init(self):
         from src.observability import (
@@ -163,12 +166,12 @@ class TestObservabilityFakeInit(unittest.TestCase):
             span,
         )
 
-        # Run init first — with env vars set in setUp() but no SDK installed,
-        # init() returns disabled=True (libs missing) but still flips
-        # _INITIALIZED=True so callers don't retry init on every request.
+        # Run init first. Whether the SDKs are installed or not, init() must
+        # flip _INITIALIZED so callers don't retry on every request — and all
+        # helpers must stay safe to call either way.
         init_result = init_observability()
-        self.assertFalse(init_result["sentry"])
-        self.assertFalse(init_result["opentelemetry"])
+        self.assertIsInstance(init_result["sentry"], bool)
+        self.assertIsInstance(init_result["opentelemetry"], bool)
 
         # All helpers must be safe to invoke regardless of SDK availability.
         capture_exception(RuntimeError("x"))
@@ -176,8 +179,8 @@ class TestObservabilityFakeInit(unittest.TestCase):
         with span("test"):
             pass
         # is_enabled toggles based on _INITIALIZED, not actual SDK availability.
-        # After init() ran and returned disabled, we still flip the flag so the
-        # caller doesn't repeatedly retry init on every request.
+        # After init() ran once, the flag is flipped so the caller doesn't
+        # repeatedly retry init on every request.
         self.assertTrue(is_enabled())
 
 
