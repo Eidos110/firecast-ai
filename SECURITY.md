@@ -1,71 +1,103 @@
 # Security Policy — FireCast
 
-> Catatan keamanan & rotasi secret untuk engineer (manusia & agen).
+This document defines how security vulnerabilities are handled in this
+repository and records the current status of secrets management.
 
-## 1. Secret yang harus di-rotasi (audit 2026-07-24)
+## 1. Supported versions
 
-| Secret | Lokasi (working tree) | Status |
-|--------|----------------------|--------|
-| `OPENWEATHER_API_KEY` plaintext | `.env` (di-gitignore, **tidak** pernah masuk history) | ROTASI di dashboard OpenWeatherMap lalu update `.env` & secret manager deploy |
-| `API_SECRET_KEY` placeholder | `.env` (`your_secure_api_secret_key_here`) | Ganti dengan 64-char acak: `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| Service-account GEE email | `frontend/utils/gee_data.py:27-28` | Sudah di-track git. Email service-account tidak sama lewat leak secret, tapi rotate di GCP Console bila ragu |
-| Key file GEE | `add_new_model/firecast-001-db06a187f9f4.json` | Di-gitignore (`.gitignore:154`). JANGAN commit. Jika pernah ter-commit, rotate key di GCP |
+Only the latest `master` branch receives security fixes. There are no
+backported release branches.
 
-## 2. Blacklist placeholder (sudah diterapkan di kode)
+## 2. Reporting a vulnerability
 
-- `src/auth.py:_PLACEHOLDER_API_KEYS` — server menolak 500 bila `API_SECRET_KEY` kosong/placeholder literal.
-- `src/config.py:WeatherAPIConfig._OWM_PLACEHOLDER_KEYS` — `has_openweather_key` False bila key placeholder, sehingga frontend fallback ke demo weather bukan 401/429 upstream.
+**Do not open a public issue for a suspected vulnerability.**
 
-Tambahkan placeholder baru bila ada pattern default di deployment baru (Render/HF Spaces secret manager).
+Report privately to the maintainer through a private channel (GitHub security
+advisory or direct contact). Please include:
 
-## 3. CI: detect-secrets hook
+- A description of the issue and its impact
+- Reproduction steps or a proof of concept
+- The affected endpoint, file or commit range (if known)
 
-`.pre-commit-config.yaml` sudah wired hook `detect-secrets` dengan baseline `.secrets.baseline`. Hook akan menolak commit yang mengandung string yang mirip secret (high-entropy, AWS/GitHub token, dll).
+Areas of particular interest:
 
-Baseline regenerate:
-```powershell
-& "E:\C.TSUBASA\miniconda\envs\FIREvCPU\Scripts\detect-secrets.exe" scan src tests main.py start_api.py | Out-File .secrets.baseline -Encoding utf8 -NoNewline
-# Strip BOM jika perlu:
-$bytes = [System.IO.File]::ReadAllBytes(".secrets.baseline")
-if ($bytes[0] -eq 0xEF) { [System.IO.File]::WriteAllBytes(".secrets.baseline", $bytes[3..($bytes.Length-1)]) }
-```
+- Authentication bypass on `X-API-Key`-protected routes
+- Remote code execution via model artifacts (`.pkl` / `.pth`)
+- SSRF via URL-taking parameters
+- Path traversal in the SPA static fallback (`src/geo_api_spa.py`)
 
-CI (`.github/workflows/ci.yml`) menjalankan `detect-secrets` pada setiap PR meskipun pre-commit di-skip (`--no-verify`).
+We will acknowledge reports within 7 days and coordinate a disclosure window
+of up to **90 days**.
 
-## 4. Filter-repo history — DILAKUKAN 2026-10-23 (koreksi catatan lama)
+## 3. Secrets management
 
-> **Koreksi**: catatan versi lama di section ini salah — `OPENWEATHER_API_KEY` real
-> justru pernah masuk history sebagai "test key" di `tests/test_config.py`
-> (commit era 2026-07-25) dan ter-copy ke catatan audit ini sendiri. GitHub
-> secret-scanning menolak push branch karena itu.
+### Rules
 
-Purge yang sudah dilakukan 2026-10-23:
+- `.env` and `secrets/` are gitignored and excluded from Docker builds
+  (`.dockerignore`).
+- Service-account key files (`*.json` credentials) must never be committed.
+  If one ever is, rotate the key at the provider immediately.
+- Deployed environments receive secrets through the platform secret manager
+  (e.g. HF Spaces encrypted secrets) — never through repository files.
+
+### Placeholder rejection (enforced in code)
+
+- `src/auth.py` → `_PLACEHOLDER_API_KEYS`: the server rejects an empty or
+  placeholder `API_SECRET_KEY` instead of serving protected routes.
+- `src/config.py` → `WeatherAPIConfig._OWM_PLACEHOLDER_KEYS`: a placeholder
+  OpenWeatherMap key is treated as "no key" so callers fall back gracefully
+  instead of receiving upstream 401/429 errors.
+
+Add new placeholder patterns whenever a new deployment template introduces a
+default value.
+
+## 4. Secret scanning in CI
+
+`.github/workflows/ci.yml` runs [`detect-secrets`](https://github.com/Yelp/detect-secrets)
+against the tree on every push and pull request, using the baseline in
+`.secrets.baseline`. Commits containing credential-like strings
+(high-entropy tokens, provider key formats) are rejected — including commits
+made with `--no-verify` that bypass local pre-commit hooks.
+
+To regenerate the baseline:
 
 ```bash
-# 1. Backup lokal: git branch backup/pre-secret-purge
-# 2. Ganti literal key dengan token REDACTED di seluruh commit cabang
-#    (git filter-branch --tree-filter 'sed -i s/<key>/REDACTED/g' <range>)
-# 3. Push ulang branch.
+detect-secrets scan src tests start_api.py launch_prototype.py \
+  > .secrets.baseline
 ```
 
-**Wajib**: rotasi key tersebut di dashboard OpenWeatherMap — ia sudah pernah
-berada di plaintext lokal dan hampir ter-push. Jika engineer menemukan
-kebocoran baru, langkah:
+## 5. History purge record (2026-10-23)
 
-```powershell
-# 1. Rotasi key di provider (OpenWeatherMap/GCP) SEBELUM rewrite history.
-# 2. Backup repo: git clone --mirror <remote> firecast.bak
-# 3. Jalankan filter-repo:
-pip install git-filter-repo
-git filter-repo --invert-paths --path .env --force
-# 4. Force-push (koordinasi dengan tim: semua orang perlu re-clone)
-```
+A real `OPENWEATHER_API_KEY` was found in git history: committed as a
+"test key" in `tests/test_config.py` (commit era 2026-07-25) and copied into
+this document. GitHub secret-scanning rejected the branch push because of it.
 
-## 5. Reporting
+Remediation performed:
 
-Laporkan kerentanan security ke maintainer via private channel (jangan buka public issue langsung) bila terkait:
-- Authentication bypass
-- Remote code execution via model artifact (.pkl/.pth)
-- SSRF via parameter URL endpoint
+1. Created a local backup branch before rewriting.
+2. Replaced the literal key with a `REDACTED_OPENWEATHER_KEY` token across
+   all commits via `git filter-branch` (the branch had never been pushed, so
+   the rewrite was safe).
+3. Corrected this document, re-pushed, then removed the backup branch, the
+   `filter-branch` backup ref and stale reflog entries so no local ref
+   retained the pre-purge lineage.
 
-Diberitahukan 90 hari untuk disclosure coordinate.
+**Still required (owner action):** rotate the OpenWeatherMap key in the OWM
+dashboard. It existed in plaintext locally and must be considered
+compromised regardless of the history rewrite.
+
+## 6. If a new secret leaks
+
+1. **Rotate the key at the provider first** — history rewriting does not
+   un-leak anything.
+2. Back up the repository: `git clone --mirror <remote> firecast.bak`
+3. Purge the file or rewrite the string:
+
+   ```bash
+   pip install git-filter-repo
+   git filter-repo --invert-paths --path .env --force
+   ```
+
+4. Force-push only with team coordination — everyone must re-clone.
+5. Notify GitHub Support to clear cached views of the secret if the repo is
+   public or has forks.

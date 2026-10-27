@@ -1,35 +1,42 @@
-# 🔥 FireCast
+# FireCast
 
-Fire risk prediction for Indonesia: a FastAPI backend and a React SPA served by
-one process. The active model is the **V4.2 two-leg stack** — LightGBM and
-XGBoost probabilities combined by a `LogisticRegressionCV` meta-learner and
-isotonic-calibrated.
+[![CI](https://github.com/Eidos110/firecast-ai/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Eidos110/firecast-ai/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.12-blue)](pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688)](requirements.txt)
+[![React 18](https://img.shields.io/badge/React-18-61dafb)](frontend_react/package.json)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+**FireCast** is a fire-risk prediction platform for Indonesia. A FastAPI backend
+and a React SPA are served by a single process; the active model is the **V4.2
+two-leg stack** — LightGBM and XGBoost probabilities combined by a
+`LogisticRegressionCV` meta-learner and isotonic-calibrated before the decision
+threshold is applied.
 
 ## Features
 
 | Feature | Description |
 |---|---|
-| Fire risk prediction | `/predict` returns calibrated `risk_score`, risk band, SHAP top features and provenance |
-| Interactive map | Leaflet map with risk heatmap, AOI draw, wind vectors |
-| AOI batch | Draw a polygon → server-side grid → `/predict/aoi` |
-| Analytics trend | Per-day p10/p50/p90 series from the processed features dataset |
-| Geocoding | Local 378-city registry → Nominatim fallback |
-| i18n | English/Indonesian, persisted in `localStorage` |
-| Model registry | SQLModel-backed version registry under `/api/models/*` |
-| Single service | One uvicorn worker serves API + built SPA on `:7860` |
+| Fire risk prediction | `/predict` returns a calibrated `risk_score`, risk band, SHAP top features and model provenance |
+| Interactive map | Leaflet map with risk heatmap, AOI drawing and wind vectors |
+| AOI batch | Draw a polygon → server-side grid → `/predict/aoi` batch inference |
+| Analytics trend | Per-day p10/p50/p90 risk series from the processed features dataset |
+| Geocoding | Local 378-city registry with Nominatim fallback |
+| i18n | English and Indonesian, persisted in `localStorage` |
+| Model registry | SQLModel-backed version registry with activation under `/api/models/*` |
+| Single-service deploy | One uvicorn worker serves the API and the built SPA on `:7860` |
 
 ## Quick start
 
-Requirements: Python 3.12 (pinned conda env in `AGENTS.md`), Node 20+, npm.
+Requirements: **Python 3.12** and **Node 20+**.
 
 ```bash
 cp .env.example .env          # set API_SECRET_KEY
 pip install -r requirements.txt
 
-# Terminal 1 — API (port 8000)
+# Terminal 1 — API only (port 8000)
 python launch_prototype.py --mode api
 
-# Terminal 2 — Vite dev server with HMR (port 3000, proxies /predict etc.)
+# Terminal 2 — Vite dev server with HMR (port 3000, proxies the API)
 cd frontend_react && npm install && npm run dev
 ```
 
@@ -51,23 +58,23 @@ docker compose up -d --build
 
 ```
 frontend_react/          React 18 + Vite + TypeScript SPA
-  src/App.tsx            3-area layout (topbar / sidebar+map / diagnostic)
+  src/App.tsx            3-area layout (topbar / sidebar + map / diagnostic)
   src/api/               typed fetch client + react-query hooks
   src/store/             zustand stores (inference, UI, toasts)
 frontend/
   locales/               shared en.json / id.json (single source)
-  themes/tokens.json     design tokens (consumed by Tailwind + TS)
+  themes/tokens.json     design tokens (consumed by Tailwind and TypeScript)
 src/
-  geo_api.py             FastAPI app, routing, rate limits, CORS
-  geo_api_spa.py         SPA static mount + history fallback
-  api/models.py          /api/models router (X-API-Key)
+  geo_api.py             FastAPI app: routing, rate limits, CORS
+  geo_api_spa.py         SPA static mount + history-mode fallback
+  api/models.py          /api/models router (X-API-Key protected)
   predict.py             serving orchestration + calibration
-  features/              single-sample feature builder + SHAP
+  features/              single-sample feature builder + SHAP explanation
   models/                lgbm, xgb, cnn (legacy), registry
   geo/services.py        locations, geocode, trend, AOI grid/batch
-  database.py            SQLModel engine and model registry tables
+  database.py            SQLModel engine and model-registry tables
   config.py              typed config + legacy module-level aliases
-add_new_model/           active V4.2 bundle (gitignored binaries)
+add_new_model/           active V4.2 bundle (tracked binaries, ~2.5 MB)
 models/                  legacy CNN + LightGBM bundle
 data/                    feature CSV/parquet, locations.json
 tests/                   pytest suite (API, parity, security, inference)
@@ -87,7 +94,7 @@ tests/                   pytest suite (API, parity, security, inference)
 | POST | `/admin/cache/invalidate` | `X-API-Key` | clear prediction cache |
 | GET | `/admin/cache/stats` | `X-API-Key` | cache snapshot |
 | POST | `/admin/db/purge` | `X-API-Key` | prediction-retention purge |
-| GET | `/admin/db/stats` | `X-API-Key` | table stats |
+| GET | `/admin/db/stats` | `X-API-Key` | table statistics |
 
 Example:
 
@@ -100,44 +107,42 @@ curl -X POST http://localhost:8000/predict \
 ```
 
 `reference_date` (optional, ISO `YYYY-MM-DD`) re-anchors the seasonal
-`month`/`day`/`doy` features.
+`month`/`day`/`doy` features. Interactive docs: `/docs` (OpenAPI).
 
-OpenAPI: `/docs`.
+Rate limits: `/predict` 30 req/min and `/predict/aoi` 10 req/min per IP.
 
 ## Model
 
-Active bundle: `add_new_model/` (V4.2 cross-section, 34 features).
+Active bundle: `add_new_model/` — **V4.2 cross-section, 34 features**.
 
-- Base learners: LightGBM `4.6.0`, XGBoost `3.3.0`.
-- Meta: `LogisticRegressionCV`, 5-fold OOF over `[p_lgbm, p_xgb]`.
-- Calibration: isotonic fitted on VAL (`calibration_isotonic.pkl`).
-- Decision threshold: `0.5316` on the calibrated scale
-  (`threshold_config.json`; surfaced as `decision_threshold` in responses).
-- Validation: `VERSION.json` → `validation_status: "validated"` (test AUC
-  0.842, Brier 0.164).
+| Component | Detail |
+|---|---|
+| Base learners | LightGBM `4.6.0`, XGBoost `3.3.0` (versions must match training exactly) |
+| Meta-learner | `LogisticRegressionCV`, 5-fold OOF over `[p_lgbm, p_xgb]` |
+| Calibration | Isotonic fitted on the validation split (`calibration_isotonic.pkl`) |
+| Decision threshold | `0.5316` on the calibrated scale (`threshold_config.json`; surfaced as `decision_threshold` in responses) |
+| Validation | `VERSION.json` → `validation_status: "validated"` (test AUC 0.842, Brier 0.164) |
 
-Kill switch for A/B testing the calibrated surface:
-`FC_DISABLE_CALIBRATION=1`.
+Set `FC_DISABLE_CALIBRATION=1` to A/B test the uncalibrated surface.
 
-Legacy path: `model_type="legacy"` uses the CNN + LightGBM mean ensemble in
-`models/`. It is kept for comparison, not the default.
-
-The GRU leg was retired with V4.2; no GRU code or artifacts remain.
+The legacy path (`model_type="legacy"`) uses the CNN + LightGBM mean ensemble
+in `models/` and is kept for comparison only — it is not the default. The GRU
+leg was retired with V4.2; no GRU code or artifacts remain.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `API_SECRET_KEY` | — (required for protected routes) | `X-API-Key` value; placeholders rejected |
-| `HOST` / `PORT` | `0.0.0.0` / `7860` | `start_api.py` bind |
+| `API_SECRET_KEY` | — (required) | `X-API-Key` value; empty or placeholder values are rejected at startup |
+| `HOST` / `PORT` | `0.0.0.0` / `7860` | `start_api.py` bind address |
 | `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` | launcher defaults |
-| `ALLOWED_ORIGINS` | localhost dev list | CORS allow-list (CSV) |
+| `ALLOWED_ORIGINS` | localhost dev list | CORS allow-list (comma-separated) |
 | `ML_DEVICE` | `auto` | `auto` / `cpu` / `cuda` |
 | `APP_ENV` | `development` | observability environment |
 | `SENTRY_DSN` | — | optional error reporting |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | optional tracing |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | optional distributed tracing |
 
-See `.env.example`.
+See [.env.example](.env.example) for the full list.
 
 ## Development
 
@@ -150,15 +155,9 @@ make lint           # ruff
 make check          # lint + backend tests + frontend typecheck/tests
 ```
 
-Quality gates used in CI:
-
-```bash
-python -m ruff check .
-python -m black --check src tests main.py start_api.py launch_prototype.py
-python -m compileall -q src
-python -m pytest tests/ -q
-cd frontend_react && npm run typecheck && npm run lint && npm test && npm run build
-```
+Quality gates enforced in CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
+ruff, black, `compileall`, pytest with coverage (gate 40%), frontend
+typecheck/lint/tests, Lighthouse performance audit and a Docker smoke build.
 
 ## Deployment
 
@@ -167,34 +166,32 @@ cd frontend_react && npm run typecheck && npm run lint && npm test && npm run bu
 `scripts/deploy_hf_space.py` builds the SPA locally, stages an allowlist
 (`src/`, `models/`, `add_new_model/`, parquet data, `locations.json`, the SPA
 build), uploads via the Hub API, waits for `RUNNING` and verifies `/health`.
-`API_SECRET_KEY` is a Space secret, never a repo file.
+`API_SECRET_KEY` is configured as an encrypted Space secret — never a repo
+file.
 
 ### Docker
 
 `Dockerfile` is multi-stage: Node 20 builds the SPA, Python 3.12 serves both.
-Target port is `7860`. `docker-compose.yml` runs the single service; the
-`production` profile adds nginx for TLS.
+The target port is `7860`. `docker-compose.yml` runs the single service; the
+`production` profile adds nginx for TLS termination.
 
 ## Troubleshooting
 
-- **`/predict` returns 500 with a model error** — the bundle under
-  `add_new_model/` is incomplete. Required: `lgb_model.pkl`, `xgb_model.pkl`,
-  `scaler_all.pkl`, `stacking_weights.pkl`, `feature_cols.json`,
-  `threshold_config.json`. All are gitignored.
-- **`ModuleNotFoundError: No module named 'src'`** — run from the repo root or
-  set `PYTHONPATH` to it.
-- **`/` returns 404** — `frontend_react/build/` is missing. Run
-  `npm run build`, or use the Vite dev server.
-- **401/500 from protected routes** — `X-API-Key` missing/wrong, or
-  `API_SECRET_KEY` unset/placeholder.
-- **Rate limit exceeded** — `/predict` is capped at 30/min per IP; `/predict/aoi`
-  at 10/min.
+| Symptom | Cause and fix |
+|---|---|
+| `/predict` returns 500 with a model error | The bundle under `add_new_model/` is incomplete. Required files: `lgb_model.pkl`, `xgb_model.pkl`, `scaler_all.pkl`, `stacking_weights.pkl`, `calibration_isotonic.pkl`, `feature_cols.json`, `threshold_config.json` |
+| `ModuleNotFoundError: No module named 'src'` | Run from the repo root, or set `PYTHONPATH` to it |
+| `/` returns 404 | `frontend_react/build/` is missing — run `npm run build`, or use the Vite dev server |
+| 401/500 from protected routes | `X-API-Key` missing or wrong, or `API_SECRET_KEY` unset/placeholder |
+| HTTP 429 | Per-IP rate limit exceeded (`/predict` 30/min, `/predict/aoi` 10/min) |
 
 ## Security
 
 Never commit `.env` or service-account keys. `secrets/` is gitignored and
-excluded from Docker builds. Report issues per `SECURITY.md`.
+excluded from Docker builds. Secret scanning (`detect-secrets`) runs in CI and
+rejects commits containing credential-like strings. See
+[SECURITY.md](SECURITY.md) for the full policy and rotation status.
 
 ## License
 
-MIT — see `LICENSE`.
+Released under the [MIT License](LICENSE).
