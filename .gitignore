@@ -161,6 +161,13 @@ docker_stash/
 !models/scaler.pkl
 !models/ensemble_threshold.pkl
 !models/feature_columns.json
+# V4.2 stacking bundle (2.5 MB total) is the ACTIVE serving model: commit it so
+# CI can exercise the real /predict path and deploys are reproducible from git.
+!add_new_model/lgb_model.pkl
+!add_new_model/xgb_model.pkl
+!add_new_model/scaler_all.pkl
+!add_new_model/stacking_weights.pkl
+!add_new_model/calibration_isotonic.pkl
 !data/firecast_data_readymodelling_final_V3.csv
 !data/processed_firecast_features_v3.csv
 
